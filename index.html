@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Coast FIRE</title>
+<meta name="description" content="Two-income Coast FIRE calculator: when can you both stop saving for retirement and still get there? With an early-retirement 72(t) and Roth-ladder bridge.">
+<meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141311" media="(prefers-color-scheme: dark)">
+<meta name="application-name" content="Coast FIRE">
+<meta name="apple-mobile-web-app-title" content="Coast FIRE">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+<header class="mast">
+  <div class="mast-row">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 15c3 0 3-3 6-3s3 3 6 3 3-3 6-3"/><path d="M3 19c3 0 3-3 6-3s3 3 6 3 3-3 6-3" opacity=".55"/><path d="M12 4v5M9.5 6.5 12 4l2.5 2.5"/></svg></span>
+    <div class="grow">
+      <p class="kicker">Coast FIRE for one or two incomes</p>
+      <h1>Coast</h1>
+    </div>
+    <button type="button" class="icon-btn" id="share-top" aria-label="Copy link to this scenario" title="Copy link to this scenario"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></button>
+    <button type="button" class="icon-btn" id="reset-top" aria-label="Reset to defaults" title="Reset to defaults"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4.5h4.5"/></svg></button>
+  </div>
+  <p class="dek">If you both stopped saving for retirement, would what you have grow into enough by the time you retire? And if not yet, when?</p>
+</header>
+
+<div id="shared-banner" class="banner" role="region" aria-label="Shared link" hidden>
+  <p>Showing numbers from a shared link. Your own saved numbers are untouched until you edit or keep these.</p>
+  <div class="actions">
+    <button type="button" class="btn" id="shared-keep">Keep these</button>
+    <button type="button" class="btn ghost" id="shared-back">Back to my numbers</button>
+  </div>
+</div>
+
+<main class="layout">
+  <!-- ===== Answer + path (first on phones) ===== -->
+  <div class="col-top">
+    <section class="card hero-card" id="results" aria-labelledby="result-title">
+      <h2 id="result-title" class="visually-hidden">Result</h2>
+      <div class="hero">
+        <svg class="ring" id="ring" viewBox="0 0 76 76" role="img" aria-label="Progress to today's Coast FIRE number">
+          <circle class="ring-track" cx="38" cy="38" r="30"/>
+          <circle class="ring-fill" id="ring-fill" cx="38" cy="38" r="30" stroke-dasharray="0 188.5" transform="rotate(-90 38 38)"/>
+          <text x="38" y="43" text-anchor="middle" class="ring-num" id="ring-num">0%</text>
+        </svg>
+        <div class="hero-main">
+          <span class="chip" id="chip"></span>
+          <div class="hero-num"><b id="hero-age"></b><span id="hero-cap"></span></div>
+        </div>
+      </div>
+      <blockquote class="pull"><p id="headline" aria-live="polite"></p></blockquote>
+      <div class="nudge" id="nudge" hidden></div>
+      <dl class="kpis">
+        <div class="kpi"><dt>FIRE number</dt><dd id="k-fire"></dd><dd class="kpi-note" id="k-fire-n"></dd></div>
+        <div class="kpi"><dt>Coast number today</dt><dd id="k-coast"></dd><dd class="kpi-note" id="k-coast-n"></dd></div>
+        <div class="kpi" id="k-ret-tile"><dt id="k-ret-l">At 65, your plan</dt><dd id="k-ret"></dd><dd class="kpi-note" id="k-ret-n"></dd></div>
+        <div class="kpi"><dt>Meets the coast line</dt><dd id="k-cross"></dd><dd class="kpi-note" id="k-cross-n"></dd></div>
+      </dl>
+      <p id="warn" class="warn" hidden></p>
+    </section>
+
+    <section class="card" aria-labelledby="chart-title">
+      <div class="card-head"><div class="grow"><h2 id="chart-title">Your path to 65</h2><p class="fine" id="chart-sub"></p></div></div>
+      <ul class="legend" aria-hidden="true">
+        <li><i class="key k-proj"></i>Projected, your plan</li>
+        <li><i class="key k-coast"></i>Coast line</li>
+        <li><i class="key k-stop"></i><span id="stop-key">If you stop today</span></li>
+        <li><i class="key k-fire"></i>FIRE number</li>
+        <li><i class="key k-zone"></i><span id="zone-key">Could coast</span></li>
+      </ul>
+      <div class="readout" id="readout" aria-live="polite"></div>
+      <div class="chart" id="chart">
+        <svg id="chart-svg" role="img" tabindex="0" aria-label="Chart"></svg>
+        <p id="chart-empty" class="chart-empty" hidden></p>
+      </div>
+      <div class="chart-foot">
+        <p class="fine">Drag across the chart, or focus it and use the arrow keys.</p>
+        <button type="button" class="linkish" id="table-toggle" aria-expanded="false" aria-controls="path-table">Show as a table</button>
+      </div>
+      <div id="path-table" class="table-wrap" hidden></div>
+    </section>
+  </div>
+
+  <!-- ===== Inputs ===== -->
+  <div class="col-inputs inputs" id="inputs">
+    <div class="section-label">Your numbers <span class="rule"></span></div>
+    <section class="card" aria-labelledby="hh-title">
+      <div class="card-head"><div class="grow"><h2 id="hh-title">Household</h2><p class="fine">Everything in today's dollars</p></div></div>
+      <div id="hh-fields"></div>
+      <details class="assume" id="assume">
+        <summary><span class="grow">Returns, inflation &amp; withdrawals</span><span class="assume-vals" id="assume-vals"></span></summary>
+        <div id="assume-fields"></div>
+      </details>
+    </section>
+
+    <div class="section-label">Earners <span class="rule"></span></div>
+    <div class="card toggle-card">
+      <div class="toggle-row first">
+        <div class="grow"><span class="tlabel" id="two-l">Two incomes</span><p class="fine" id="two-hint">Turn off for a one-person plan.</p></div>
+        <button type="button" class="switch" id="sw-two" role="switch" aria-checked="true" aria-labelledby="two-l" aria-describedby="two-hint"><i></i></button>
+      </div>
+    </div>
+    <div class="partners">
+      <section class="card partner" id="card-A" aria-labelledby="pA-t"></section>
+      <section class="card partner" id="card-B" aria-labelledby="pB-t"></section>
+    </div>
+
+    <section class="card" aria-labelledby="hsa-title">
+      <div class="card-head"><div class="grow"><h2 id="hsa-title">HSA</h2><p class="fine">One row for the household</p></div></div>
+      <div class="seg" role="group" aria-label="HSA coverage">
+        <button type="button" id="seg-family" aria-pressed="true">Family<small>one $8,750 limit</small></button>
+        <button type="button" id="seg-self" aria-pressed="false">Self-only<small>$4,400 each</small></button>
+      </div>
+      <div id="hsa-fields"></div>
+    </section>
+
+    <div class="actions end-actions">
+      <button type="button" class="btn lg" id="share"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>Copy link</button>
+      <button type="button" class="btn ghost lg" id="reset">Reset to defaults</button>
+    </div>
+  </div>
+
+  <!-- ===== Analysis ===== -->
+  <div class="col-more">
+    <div class="section-label">What you're putting in <span class="rule"></span></div>
+    <section class="card" aria-labelledby="ct-title">
+      <h2 id="ct-title" class="mini-title">Total going in each year</h2>
+      <div class="total"><b id="ct-total"></b><span class="fine" id="ct-sub"></span></div>
+      <ul class="legend" aria-hidden="true">
+        <li><i class="sq c1"></i>401(k)</li><li><i class="sq c2"></i>Employer</li><li><i class="sq c3"></i>Roth IRA</li><li><i class="sq c4"></i>HSA</li>
+      </ul>
+      <svg class="bars" id="bars-svg" role="img" aria-label="Contributions by partner"></svg>
+      <p class="hint" id="ct-after"></p>
+    </section>
+
+    <section class="card" aria-labelledby="ec-title">
+      <div class="card-head"><div class="grow"><h2 id="ec-title">Earliest coast age</h2><p class="fine" id="ec-sub"></p></div></div>
+      <ul class="ec" id="ec-list"></ul>
+      <p class="subhead" id="spark-title"></p>
+      <svg class="spark" id="spark-svg" role="img" aria-label="Balance at retirement by the age you both stop"></svg>
+    </section>
+
+    <section class="card" aria-labelledby="hm-title">
+      <div class="card-head"><div class="grow"><h2 id="hm-title">What if returns or withdrawals differ?</h2><p class="fine" id="hm-sub">Earliest age you could both stop · outlined = your inputs</p></div></div>
+      <div class="heat-wrap" id="heat"></div>
+      <div class="scale" id="heat-scale" aria-hidden="true">
+        <span class="ramp-wrap" id="heat-ramp"><span>Years coasting</span>
+          <span class="ramp"><span><i class="h1"></i>0</span><span><i class="h2"></i>1–4</span><span><i class="h3"></i>5–9</span><span><i class="h4"></i>10–14</span><span><i class="h5"></i>15+</span></span></span>
+        <span class="none-key"><i></i><span id="none-key-t">% of FIRE reached</span></span>
+      </div>
+      <p class="hint" id="heat-note"></p>
+    </section>
+
+    <div class="section-label">Retire before 59½ <span class="rule"></span></div>
+    <section class="card" id="bridge" aria-labelledby="br-title"></section>
+
+    <section class="card explain" aria-label="How it works">
+      <details>
+        <summary>What is Coast FIRE?</summary>
+        <p>FIRE stands for Financial Independence, Retire Early. You reach <strong>Coast FIRE</strong> when what you have invested would, with no more saving, grow into your retirement number by your retirement age.</p>
+        <p>You'd still work to pay today's bills, but you'd no longer need to save for retirement. A lower-paying job, part-time work or a sabbatical stops putting retirement at risk.</p>
+      </details>
+      <details>
+        <summary>Why two coast ages?</summary>
+        <p>The big number at the top is the <strong>earliest age you could both stop saving</strong> and still reach your FIRE number by retirement. It is solved for: the calculator tries every age and keeps the first that works.</p>
+        <p><strong>Meets the coast line</strong> is the first age your own plan, as you entered it, is at or above the coast line. When nobody keeps saving after coasting and there's no Barista draw, the two are the same age. If you keep saving part of your contributions after coasting, or draw from the portfolio while coasting, they can differ, so both are shown.</p>
+        <p>The rows under <strong>Earliest coast age</strong> also solve for each partner alone, holding the other's plan as entered.</p>
+      </details>
+      <details>
+        <summary>How this calculator works</summary>
+        <p><strong>FIRE number</strong> = retirement spending ÷ safe withdrawal rate.</p>
+        <p><strong>Coast number today</strong> = the FIRE number discounted back to today at the real return: FIRE ÷ (1 + real return)<sup>years to retirement</sup>. The <strong>coast line</strong> on the chart is the same sum for every age.</p>
+        <p>The <strong>projection</strong> steps one year at a time: last year's balance grows at the real return, then this year's contributions are added (401(k), employer, Roth IRA and HSA for each partner, changing at each partner's coast age) and any Barista draw is taken out.</p>
+        <p>Contributions are held constant in today's dollars, so they rise with inflation in real life.</p>
+      </details>
+      <details>
+        <summary>Why "real" returns?</summary>
+        <p>Everything is in today's dollars. The return is converted with the exact formula (1 + return) ÷ (1 + inflation) − 1. A 7% return with 2.4% inflation is about 4.49% real, not the 4.6% you'd get by subtracting.</p>
+      </details>
+      <details>
+        <summary>About the 4% rule</summary>
+        <p>The Trinity study (1998) found that taking 4% of a stock-and-bond portfolio in the first year, then raising it with inflation, lasted 30 years in most historical periods. People retiring early, with 40 or 50 years to fund, often plan on 3.25% to 3.75%.</p>
+      </details>
+      <details>
+        <summary>Where the defaults come from</summary>
+        <p>Every starting value is a published US median or typical figure, not anyone's own numbers. Change them to yours; they stay on this device.</p>
+        <ul class="sources">
+          <li><strong>Two earners at $62,608 each:</strong> median full-time weekly earnings, $1,204 in 2025, × 52 (<a href="https://www.bls.gov/opub/ted/2026/median-weekly-earnings-were-1204-in-2025.htm" rel="noopener">BLS</a>).</li>
+          <li><strong>401(k) $4,800 (7.7% of pay) and employer 4.3%:</strong> average deferral rate 7.7% and average total contribution rate 12.0% in Vanguard's <em>How America Saves 2025</em> (<a href="https://www.planadviser.com/automatic-plan-features-help-participant-savings-rates-stay-resilient-2024-says-vanguard/" rel="noopener">PLANADVISER</a>; <a href="https://finance.yahoo.com/markets/options/articles/half-americans-falling-short-15-134844754.html" rel="noopener">24/7 Wall St.</a>), so employer ≈ 12.0 − 7.7.</li>
+          <li><strong>Roth IRA $3,200:</strong> average Roth IRA contribution of filers aged 35 to 49, $3,211 in 2022 (IRS data in <a href="https://www.everycrsreport.com/reports/R48051.html" rel="noopener">CRS R48051</a>).</li>
+          <li><strong>HSA $1,400:</strong> nearly $60 billion contributed in 2025 across 41.7 million accounts, about $1,440 each (<a href="https://www.devenir.com/wp-content/uploads/2025-Year-End-Devenir-HSA-Research-Report-Executive-Summary.pdf" rel="noopener">Devenir</a>).</li>
+          <li><strong>Invested $45,000:</strong> median retirement-account balance of families headed by someone 35 to 44 who have one, 2022 (<a href="https://www.federalreserve.gov/publications/files/scf23.pdf" rel="noopener">Federal Reserve SCF</a>).</li>
+          <li><strong>Age 42:</strong> median age of employed US workers, 2025 (<a href="https://www.bls.gov/cps/cpsaat11b.htm" rel="noopener">BLS</a>).</li>
+          <li><strong>Spending $71,000/yr:</strong> two-person households spent $80,830 in 2024, of which $9,652 was pension and Social Security contributions that stop at retirement (<a href="https://fred.stlouisfed.org/series/CXUTOTALEXPLB0504M" rel="noopener">BLS Consumer Expenditure Survey via FRED</a>).</li>
+          <li><strong>Inflation 2.4%:</strong> the Social Security Trustees' long-run intermediate CPI assumption (<a href="https://www.ssa.gov/OACT/TR/2023/V_B_econ.html" rel="noopener">SSA</a>).</li>
+          <li><strong>Return 7%, withdrawal 4%, retirement at 65:</strong> common planning figures (WalletBurst's default return, the Trinity study, Medicare age).</li>
+          <li><strong>Bridge and coast age:</strong> pre-tax share 90%, since Roth money is only about 7% of US IRA and workplace-plan assets (<a href="https://q3adv.com/tax-free-retirement-gap-report/" rel="noopener">Q3 Advisors, from ICI data</a>), rounded down to leave room for the HSA and taxable money; 72(t) share 50% (an even split); 72(t) rate 5% (the floor of the maximum IRS Notice 2022-6 allows); coast age 55 (a placeholder midpoint, used only when you switch it on).</li>
+          <li><strong>2026 limits:</strong> 401(k) $24,500, IRA $7,500 (<a href="https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500" rel="noopener">IRS</a>); HSA $4,400 self-only, $8,750 family (Rev. Proc. 2025-19).</li>
+        </ul>
+        <p>With these typical numbers the household does <em>not</em> reach its FIRE number by 65. That's a realistic starting point, not a mistake.</p>
+      </details>
+      <details>
+        <summary>Caveats</summary>
+        <p>Markets don't grow smoothly; a crash early on can push you back below the coast line for years. Taxes, fees, Social Security, pensions, catch-up contributions and income limits on Roth IRAs aren't modeled. Social Security in particular could lower the amount you need.</p>
+        <p>This is a planning toy, not financial or tax advice.</p>
+      </details>
+    </section>
+  </div>
+</main>
+
+<p class="foot fine">Everything you type stays in this browser. Nothing is sent anywhere. <a href="privacy.html">Privacy</a></p>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<button type="button" id="peek" class="peek" hidden aria-label="Jump to the result"></button>
+
+<script src="calc.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

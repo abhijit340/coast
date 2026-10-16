@@ -1,0 +1,32 @@
+# Allowlist: ignore everything, then list what the public site and its checks need.
+# This repo is public. Never commit spreadsheets, exports, or anyone's real numbers.
+/*
+!/.gitignore
+!/README.md
+!/SPEC.md
+!/index.html
+!/privacy.html
+!/style.css
+!/calc.js
+!/app.js
+!/sw.js
+!/manifest.webmanifest
+!/icons/
+!/tests/
+!/tools/
+
+# Even inside allowed folders, never these.
+*.xlsx
+*.xls
+*.csv
+*.ods
+*.numbers
+*.pdf
+*.txt
+*.json
+*.env
+.env
+.env.*
+__pycache__/
+Thumbs.db
+.DS_Store

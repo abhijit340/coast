@@ -8,10 +8,13 @@ It's a static page: plain HTML, CSS and JavaScript, with no build step, framewor
 
 ## Using it
 
+The first screen holds only the answer and the chart. Everything else is still there, folded into rows that each show a live one-line value ("Contributions · $22,784/yr", "Returns 7.0% · inflation 2.4% · withdraw 4.0%"); tap a row to open it. Which rows are open is remembered on this device, separately from your numbers.
+
 - **Answer first.** A progress ring, a status chip (On track / Coasting now / Not before 65 / $X short), the earliest age you could both stop saving, and one sentence about that same scenario. When nothing works yet (the case with the median defaults), it says how far short you are and what would close it: save more each year, retire later, or spend less.
-- **Household:** ages, invested money, retirement spending, an optional Barista FIRE draw while coasting, and a collapsed "Returns, inflation & withdrawals" group whose header shows its values.
-- **Partners A and B** (stack on phones): salary, 401(k), employer %, Roth IRA, and an optional "Coast from an age" with "Keep saving after coasting" (% of before). The × or the Two incomes switch makes it a one-person plan. Legal limits show as a tick and label on the slider; typing over one clamps with a note.
-- **HSA:** one row for the household; Family (one $8,750 limit) or Self-only ($4,400 each).
+- **Your numbers:** ages, invested money and retirement spending; then collapsed rows for returns, inflation & withdrawals and for an optional Barista FIRE draw while coasting. A field's (i) shows its note.
+- **Partners A and B** (stack on phones): salary and a total line shown; 401(k), employer %, Roth IRA and an optional "Coast from an age" in a collapsed row, with "Keep saving after coasting" (% of before). The × or the Two incomes switch makes it a one-person plan. Legal limits show as a tick and label on the slider; typing over one clamps with a note.
+- **HSA:** one collapsed row for the household; Family (one $8,750 limit) or Self-only ($4,400 each).
+- **Go deeper** (collapsed rows below the inputs, or on the right on wide screens): contributions, earliest coast age, what-if table, the bridge, and how it works.
 - **Earliest coast age:** solved for both together and for each partner alone (the other's plan held as set), each with an **Apply** button that sets the coast switches and ages.
 - **Your path (main chart):** your plan, the coast line, "if you stop today", and a dashed teal **Keep saving, never coast** line: everyone keeps their full saving for good (no coast ages, no Barista draw), working past the retirement age if needed. A dot marks where it reaches the FIRE number ("Keep saving → retire at 75"), and the age axis runs past retirement far enough to show it. The **Never coast** tile says "you could retire at about N" and how that compares with your chosen age (or "Not by 100"). Drag or use the arrow keys for a readout; **Show as a table** lists every age.
 - **What if returns or withdrawals differ?** A real table: rows are the investment return before inflation, columns the safe withdrawal rate, each header with its unit, and a caption saying what a cell means (the earliest age you could both stop saving). Shade = years of coasting, hatched = can't reach the FIRE number even saving the whole way (the % shows how much you'd have), and the cell for your own inputs is outlined and labelled "your inputs". A legend under the table explains all three.
@@ -25,8 +28,9 @@ It's a static page: plain HTML, CSS and JavaScript, with no build step, framewor
 | `index.html` | The page |
 | `style.css` | Styles; light and dark follow the system setting |
 | `calc.js` | All the math, pure functions, no DOM. `window.CoastFire` in the browser, `require("./calc.js")` in node. Holds the 2026 limits and the IRS Single Life Table (ages 30–60) |
+| `ui.js` | The one-line summaries on collapsed rows and the saved open/closed state; pure, tested in node |
 | `app.js` | Builds the fields, keeps boxes and sliders in sync, writes results, draws the SVG charts, saves inputs |
-| `sw.js` | Service worker: network first, saved copy after 3 s or offline. Bump `CACHE` (now `coast-fire-v4`) whenever the files change |
+| `sw.js` | Service worker: network first, saved copy after 3 s or offline. Bump `CACHE` (now `coast-fire-v5`) whenever the files change |
 | `manifest.webmanifest`, `icons/` | Home-screen install. `python tools/make_icons.py` (needs Pillow) redraws the icons |
 | `privacy.html` | Privacy note |
 | `tests/run_tests.js` | Tests |

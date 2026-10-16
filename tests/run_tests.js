@@ -22,6 +22,9 @@ sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(path.join(ROOT, "calc.js"), "utf8"), sandbox, { filename: "calc.js" });
 const CF = sandbox.CoastFire;
+// ui.js (summary lines, saved open/closed state) loads after calc.js, as in the page.
+vm.runInContext(fs.readFileSync(path.join(ROOT, "ui.js"), "utf8"), sandbox, { filename: "ui.js" });
+const UI = sandbox.CoastUI;
 
 let passed = 0, failed = 0;
 function check(name, ok, detail) {
@@ -412,6 +415,70 @@ check("limit sliders end exactly on the limit", CF.sliderToValue("kA", S) === 24
 check("HSA slider follows the coverage limit", CF.valueToSlider("hsa", 4400, 4400) === S && CF.valueToSlider("hsa", 1100, 4400) === 500);
 check("linear sliders are unchanged", CF.valueToSlider("age", 42) === 42 && CF.valueToSlider("age", 5) === 18 && CF.valueToSlider("nominal", 30) === 12);
 check("nice rounding", CF.niceRound(1234567, 1000) === 1250000 && CF.niceRound(45200, 1000) === 45000 && CF.niceRound(0, 50) === 0);
+
+// ---------- collapsed sections: saved state and summary lines (ui.js) ----------
+{
+  const P = (raw) => J(UI.parseOpen(raw));
+  check("open state: missing, broken or non-object JSON reads as empty",
+    P(null) === "{}" && P("") === "{}" && P("{oops") === "{}" && P("[true]") === "{}" && P("7") === "{}");
+  check("open state: keeps id-like keys with true/false only",
+    P(J({ "d-kpis": true, assume: false, "bad key": true, x: "yes", "2x": true, "d-heat": 1 })) === J({ "d-kpis": true, assume: false }));
+  const m0 = { a: true };
+  const m1 = UI.withOpen(m0, "d-ec", 1);
+  check("open state: withOpen returns a new map and leaves the old one alone", J(m0) === J({ a: true }) && m1["d-ec"] === true && m1.a === true);
+  check("open state: a saved choice beats the default, the default fills gaps",
+    UI.isOpenIn({ x: false }, "x", true) === false && UI.isOpenIn({}, "x", true) === true && UI.isOpenIn({}, "y") === false);
+  check("open state: its storage key is separate from the numbers", UI.UI_KEY !== "coastfire.v2" && UI.UI_KEY === "coastfire.ui.v1");
+
+  const d = CF.project({});
+  const kr = (x) => CF.fmtCompact(Math.round(x / 1000) * 1000);
+  check("nudge line (defaults): save more, retire at 75, or spend less",
+    UI.nudgeLine(d) === `To get there by 65: save ~${kr(d.requiredAnnual)}/yr, retire at 75, or spend ~${kr(d.spendWithin)}/yr.`, UI.nudgeLine(d));
+  check("nudge line reads aloud without the tilde", !UI.spoken(UI.nudgeLine(d)).includes("~") && UI.spoken("~x") === "about x");
+  check("numbers row (defaults): FIRE, coast today, shortfall at 65",
+    UI.kpiSummary(d) === `FIRE $1.78M · coast today ${CF.fmtCompact(d.coastNow, 2)} · ${CF.fmtCompact(-d.surplus, 2)} short at 65`, UI.kpiSummary(d));
+  const rich = CF.project({ assets: 500000 });
+  check("numbers row says ahead when the plan has a surplus", rich.surplus > 0 && UI.kpiSummary(rich).endsWith(" ahead at 65"), UI.kpiSummary(rich));
+  check("numbers row with bad ages asks to fix them", UI.kpiSummary(CF.project({ age: 60, retAge: 60 })) === "fix the ages first");
+  check("contributions row (defaults): $22,784/yr and the monthly figure",
+    UI.contribSummary(d) === `$22,784/yr · ${CF.fmtMoney(d.start.total / 12)}/mo`, UI.contribSummary(d));
+  check("earliest coast row (defaults): not possible by 65", UI.ecSummary(d) === "not possible by 65");
+  const E = rich.earliest, ageW = (e) => (e.age <= rich.inputs.age ? "now" : String(e.age));
+  check("earliest coast row: both, then each partner alone",
+    UI.ecSummary(rich) === `both ${ageW(E.both)} · A alone ${ageW(E.A)} · B alone ${ageW(E.B)}`, UI.ecSummary(rich));
+  const solo = CF.project({ assets: 500000, two: 0 });
+  check("earliest coast row, one person: just the age", UI.ecSummary(solo) === String(solo.earliest.both.age), UI.ecSummary(solo));
+  check("partner row, no coast plan: accounts, then no coast",
+    UI.partnerSummary(d.inputs, "A") === "401(k) $4,800 · employer 4.3% · Roth $3,200 · no coast", UI.partnerSummary(d.inputs, "A"));
+  const coasting = CF.sanitize({ ...CF.DEFAULTS, coastOnB: 1, afterB: 30 }).values;
+  check("partner row, coast plan on: it leads the line",
+    UI.partnerSummary(coasting, "B") === `coasts at 55, then ${CF.fmtMoney(CF.partnerBase(coasting, "B").total * 0.3)}/yr · 401(k) $4,800 · employer 4.3% · Roth $3,200`, UI.partnerSummary(coasting, "B"));
+  check("partner row: the after-coast amount is 30% of 401(k) + employer + Roth",
+    Math.abs(UI.afterCoast(coasting, "B") - (4800 + 62608 * 0.043 + 3200) * 0.3) < 1e-6 && UI.afterCoast(coasting, "A") === 0);
+  const stopAll = CF.sanitize({ ...CF.DEFAULTS, coastOnA: 1 }).values;
+  check("partner row, coasting with nothing kept: no amount", UI.partnerSummary(stopAll, "A").startsWith("coasts at 55 · 401(k)"), UI.partnerSummary(stopAll, "A"));
+  const gd = CF.grid(CF.DEFAULTS), gOk = gd.cells.flat().filter((c) => c.age !== null).length;
+  check("returns grid row: how many of the 25 cases make it",
+    UI.heatSummary(d, gd) === (gOk === 0 ? "none make it by 65" : gOk === 25 ? "all 25 make it" : `${gOk} of 25 make it`), UI.heatSummary(d, gd));
+  const gRich = CF.grid({ ...CF.DEFAULTS, assets: 2000000 });
+  check("returns grid row: every case works", UI.heatSummary(CF.project({ ...CF.DEFAULTS, assets: 2000000 }), gRich) === "all 25 make it");
+  check("returns grid row with bad ages asks to fix them", UI.heatSummary(CF.project({ age: 60, retAge: 60 }), CF.grid({ age: 60, retAge: 60 })) === "fix the ages first");
+  const late = CF.sanitize({ ...CF.DEFAULTS, coastOnA: 1, coastAgeA: 70 }).values;
+  check("partner row, coast age at or after retirement: no effect", UI.partnerSummary(late, "A").startsWith("coast age 70, no effect"));
+  check("HSA row", UI.hsaSummary(d.inputs) === "Family · $1,400/yr" && UI.hsaSummary({ hsaFamily: 0, hsa: 1000 }) === "Self-only · $1,000/yr");
+  check("Barista draw row: none by default", UI.drawSummary(d) === "none");
+  const drawing = CF.project({ draw: 20000, coastOnA: 1, coastOnB: 1, coastAgeA: 50, coastAgeB: 50 });
+  check("Barista draw row: amount and the first coast age", UI.drawSummary(drawing) === `${CF.fmtCompact(20000)}/yr from 50`, UI.drawSummary(drawing));
+  check("Barista draw row: needs a coast age when none is set", UI.drawSummary(CF.project({ draw: 20000 })) === `${CF.fmtCompact(20000)}/yr · needs a coast age`);
+  check("returns row: 7.0% · inflation 2.4% · withdraw 4.0%", UI.assumeSummary(d.inputs).text === "7.0% · inflation 2.4% · withdraw 4.0%");
+  const v55 = { ...CF.DEFAULTS, retAge: 55 }, r55 = CF.project(v55), b55 = CF.bridge(v55, r55);
+  const bs = UI.bridgeSummary(r55, b55);
+  check("bridge row before 59½: chip, value and teaser",
+    bs.title === "Early-access bridge" && bs.value === "5 short years" && bs.chip.kind === "bad" &&
+    bs.teaser === `72(t) pays ${kr(b55.pay0)} in year one; short ${CF.fmtCompact(b55.totalShort, 2)} over 5 years.`, J(bs));
+  const b65 = UI.bridgeSummary(d, CF.bridge(CF.DEFAULTS, d));
+  check("bridge row at 65: one invitation, no chip or teaser", b65.title === "Retiring before 59½?" && b65.chip === null && b65.teaser === "", J(b65));
+}
 
 // ---------- privacy scan: no stray amounts, no spreadsheets ----------
 // Every concrete number must trace back to SPEC.md: cited defaults and their sources,

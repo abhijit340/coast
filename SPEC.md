@@ -15,13 +15,16 @@ Nothing the user types leaves the device. A test fails on any dollar amount not 
 
 - Plain static HTML + CSS + vanilla JS. No build step, frameworks, CDN, external fonts or analytics.
 - Files: `index.html`, `style.css`, `calc.js` (pure math, UMD: `window.CoastFire` / `module.exports`),
-  `app.js` (DOM, SVG charts, storage), `sw.js` (network-first, cached fallback after 3 s; cache
-  `coast-fire-v4`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
+  `ui.js` (pure: the summary line of each collapsed section and the saved open/closed state, tested in
+  node), `app.js` (DOM, SVG charts, storage), `sw.js` (network-first, cached fallback after 3 s; cache
+  `coast-fire-v5`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
   `tests/run_tests.js`, `README.md`, `SPEC.md`.
 - Mobile-first at 375px: one column, max-width 420px, 16px gutters plus safe-area insets, no
   horizontal scroll. At 860px and up: inputs on the left (340–400px), results on the right.
 - Light and dark from `prefers-color-scheme`; `:root[data-theme]` overrides exist for testing.
-- `localStorage` key `coastfire.v2` (JSON of all inputs), every access in try/catch. A v1 value
+- `localStorage` key `coastfire.v2` (JSON of all inputs), every access in try/catch. Layout lives apart
+  from the numbers: `coastfire.ui.v1` (`{sectionId: open}`) and `coastfire.chartHintSeen`; reset, Undo
+  and shared links never touch them. A v1 value
   (`coastfire.inputs`) is migrated once (household fields only) and deleted.
 
 ## 2. Inputs (all money in today's dollars)
@@ -71,7 +74,7 @@ is "HSA" (two people: "HSA (shared)" for family coverage, "HSAs (A + B)" for sel
 ## 3. Outputs
 
 **Answer card (hero).** Progress ring (invested ÷ today's coast number), then a status chip with an
-icon and a word, then one big value with a caption, then one plain sentence (serif pull-quote) that
+icon and a word, then one big value with a caption, then one plain sentence (serif, 17px) that
 describes the *same* scenario as the big value:
 
 | State | Chip | Big value / caption | Sentence |
@@ -81,9 +84,32 @@ describes the *same* scenario as the big value:
 | Solved age c < R, plan reaches FIRE | good, check "On track" | c / earliest age you can both stop saving | "Keep adding $C/yr together until c. After that, growth alone takes you to your $F FIRE number by R." (with saving-after-coasting: "then $D/yr after that") |
 | Solved age c < R, plan as entered short | warn "Plan $X short" | c | same + "Your plan as entered (A coasts at 55) ends $X short." |
 | c = R | warn, clock "Not before R" | R / keep saving right up to retirement | |
-| Not possible | bad, alert "$X short" ("$X short saving to R" when a coast age is on, since the tile and bottom bar show the plan as entered) | "Not by R" / saving the whole way isn't enough yet | "Not quite on course yet. At $23K/yr you reach $1.01M by 65, short of $1.78M." + nudge box: save about $K/yr together, or retire at R′, or spend about $S/yr |
+| Not possible | bad, alert "$X short" ("$X short saving to R" when a coast age is on, since the tile and bottom bar show the plan as entered) | "Not by R" / saving the whole way isn't enough yet | "Not quite on course yet. At $23K/yr you reach $1.01M by 65, short of $1.78M." + one quiet line "To get there by R: save ~$K/yr, retire at R′, or spend ~$S/yr.", which opens the full list with today's values |
 
-KPI tiles (2×2), each with a line of its own maths: **FIRE number** ("$71,000 ÷ 4.0%"),
+**Calm first screen (progressive disclosure).** Shown by default: masthead (logo, title, share and reset),
+the answer card, and the chart card (title, one-line subtitle, a three-item legend with an "Other lines"
+button for the keys of the other three (always drawn), readout, plot, and a hint "Drag the chart, or use
+the arrow keys, to read any age." shown until the chart is first used; the chart's label always names the
+keys); then
+the four main inputs, the Two incomes switch, each partner's salary with one total line ("Saving $X/yr
+· Y% of pay"), and Copy link / Reset. Everything else is a native `<details>` row whose closed summary
+shows a live one-line value at a fixed height: the numbers (KPIs) right after the chart; Returns;
+Barista draw; each partner's 401(k), employer, Roth and coast plan; HSA; and a "Go deeper" list:
+contributions, earliest coast age (with the sparkline nested), what if returns differ (with "How to read
+this" nested), the early-access bridge, and how it works (seven explainers in the same rows, all closed, "What is Coast FIRE?" first).
+"What if returns differ" summarises the grid ("N of 25 make it", "all 25 make it", "none make it by R").
+A partner's coast row reads "coasts at C, then $X/yr" when part of the saving continues.
+Before 59½ the bridge's chip and a one-sentence teaser show above its closed row (no second chip inside
+it), and the same chip with "before 59½: see the bridge" shows in the answer card; crossing 59½ never
+opens it. Field hints show while the number box has focus or after a tap on the label's (i); hints
+holding a button and the coast-age warning always show; slider range labels show only on focus (the
+limit tick always). An error inside a closed section opens it. A button that changes a field in a
+closed section opens it only if that section is the button's own or comes later on the page;
+otherwise the row flashes. Charts in a closed section are drawn when it opens. At 860px and up the
+numbers start open unless the reader has closed them. Only the reader's own opens and closes are saved;
+the page's (saved state, errors, Apply buttons) are not.
+
+KPI tiles (a plain two-column list with hairlines inside "The numbers"), each with a line of its own maths: **FIRE number** ("$71,000 ÷ 4.0%"),
 **Coast number today** ("needed now to coast to 65 · you have $45K"), **At 65, your plan** (the only
 balance-at-retirement figure; ▲ surplus / ▼ short with icon and word, plus the plan, e.g. "saving to
 65" or "plan as entered: A coasts at 55"; the tile turns bad when short), **Meets the coast line** (first whole age the
@@ -221,7 +247,7 @@ Closed form for the tests (both coast at c, after = 0, no draw, k = c − age):
 Tokens on `:root`: bg #f6f3ec, surface #fffdf9, ink #1d1c1a, ink-2 #4f4b44, muted #6f6962, line
 #e4ded3, accent (UI and projection line) #2f5bb8, text accent #24489a; dark: bg #141311, surface
 #1c1b18, ink #efebe3, accent #5f88e0. Serif (system Iowan/Palatino/Georgia) for headings and the
-pull-quote; sans for numbers (the 48px hero number is sans). Status good/bad/warn always with icon +
+headline; sans for numbers (the 44px hero number is sans). Only the answer and chart cards are raised; inputs and the Go deeper rows sit on the page background, separated by space and hairlines. Status good/bad/warn always with icon +
 word. Series (validated with the dataviz validator, both modes): 401(k) #2f5bb8, employer #20917a,
 Roth #c2602e, HSA #a0549a; bridge 72(t) blue, taxable neutral, Roth basis orange, ladder teal,
 short = hatched red. Bridge colours follow meaning, not position: pre-tax money blue (401(k), 72(t)),
@@ -243,13 +269,12 @@ plus the **keep saving, never coast** line (`--keep`, the validated teal series 
 #2aa384, dashed 7–3, in the legend as "Keep saving, never coast", with "(same as your plan to R)" when
 nobody coasts). It is drawn from where it leaves the plan (at R when nobody coasts). When its FIRE age
 is after R the x-axis runs to `min(top, wholeAge + 2)`, a dotted hairline and a bold tick mark R, the
-never-coast age always gets a tick (other ticks within 22px of it are dropped), the subtitle adds
-"· never-coast line runs on to {end}", and only this line continues past R. A teal dot sits where it
+never-coast age always gets a tick (other ticks within 22px of it are dropped), and only this line continues past R. A teal dot sits where it
 meets the FIRE line, labelled "Keep saving → retire at N", placed clear of the projection and
 never-coast lines when it can be; when already at FIRE today there is no dot or label (the tile says
 "Now"). The projection's end label and the coast-pin labels also try spots clear of the never-coast line
-first. The readout shows the plan's gap right after Projected / Coast line ("plan $X below coast
-line"), then "Keep saving $X" where it differs from the plan, and past R shows "Keep saving $X · still
+first. At rest the readout is quiet (no box, plain weight: age, Projected, Coast line); while dragging or
+stepping it shows the plan's gap right after Projected / Coast line ("plan $X below coast line"), then "Keep saving $X" where it differs from the plan, and past R shows "Keep saving $X · still
 working past R · $Y over/under FIRE"; the table gains a "Never coast" column and rows to the end of the
 axis, ✓ on the first age at the FIRE number. Its note sits above the scroll box; at ≤480px amounts are
 compact and the Age column is sticky;
@@ -323,7 +348,7 @@ Hand-checked with a 0% real return (nominal = inflation) so every value adds up 
 - With growth: loop = closed form (random sets), solver = brute force, solver = crossing when
   after = 0; required yearly total lands on FIRE; grid shape and % reached; limits and clamps; hash
   round trip incl. v1 links; slider scale; formatting (money as $1,234,567; 999,600 counts as $1M); the defaults table above; the Single Life
-  values; and the privacy scan (no spreadsheets; no dollar amount or 4+ digit number outside the
+  values; the collapsed-row summaries and the saved open/closed map (`ui.js`); and the privacy scan (no spreadsheets; no dollar amount or 4+ digit number outside the
   allowlist of figures in this file), plus a check that every allowlist entry is written in this
   file or a test scenario.
 

@@ -5,6 +5,7 @@
 "use strict";
 
 const CF = window.CoastFire;
+const UI = window.CoastUI; // summary lines and saved open/closed state (ui.js)
 const STORE_KEY = "coastfire.v2";
 const OLD_KEY = "coastfire.inputs"; // v1
 
@@ -72,38 +73,49 @@ const metaOf = (key) => META[key] || META[key.slice(0, -1)];
 const partnerOf = (key) => (/[AB]$/.test(key) && !META[key] ? key.slice(-1) : null);
 const LIMIT_TEXT = { k401: "$24,500 limit", roth: "$7,500 limit" };
 const NUM_KEYS = CF.KEYS.filter((k) => !CF.FIELDS[k].bool);
+// Hints that stay on screen: ones holding a button, and the coast-age out-of-range warning.
+// The rest show while the number box has focus, or after a tap on the field's (i).
+const KEEP_HINT = new Set(["sepShare", "basis", "coastAgeA", "coastAgeB"]);
 
 function fieldHTML(key) {
   const m = metaOf(key), f = CF.FIELDS[key], p = partnerOf(key);
   const aria = (p ? `Partner ${p}: ` : "") + m.label;
   return `<div class="field" data-key="${key}">
-    <div class="field-top"><label for="f-${key}">${esc(m.label)}</label>
+    <div class="field-top"><span class="lab"><label for="f-${key}">${esc(m.label)}</label><button type="button" class="info" id="i-${key}" aria-expanded="false" aria-controls="h-${key}" aria-label="${esc("About " + aria)}" hidden>i</button></span>
       <span class="box">${m.pre ? '<span class="unit pre">$</span>' : ""}<input id="f-${key}" inputmode="${m.mode || "decimal"}" autocomplete="off" aria-describedby="n-${key} h-${key}"${p ? ` aria-label="${esc(aria)}"` : ""}>${m.unit ? `<span class="unit">${esc(m.unit)}</span>` : ""}</span></div>
     <p class="note" id="n-${key}" aria-live="polite"></p>
     <div class="slider"><input type="range" id="s-${key}" aria-label="${esc(aria)}">${f.limit ? '<span class="limit-tick" aria-hidden="true"></span>' : ""}</div>
     ${f.limit ? `<div class="range" aria-hidden="true"><span>$0</span><span class="lim" id="lim-${key}">${LIMIT_TEXT[f.limit] || ""}</span></div>` : ""}
-    <p class="hint" id="h-${key}">${m.hint ? esc(m.hint) : ""}</p>
+    <p class="hint${KEEP_HINT.has(key) ? " keep" : ""}" id="h-${key}">${m.hint ? esc(m.hint) : ""}</p>
   </div>`;
 }
 
 function partnerHTML(p) {
   const other = p === "A" ? "B" : "A";
-  return `<header class="card-head">
+  // Shown: name, salary and one total line. The accounts and the coast plan sit in a closed row.
+  return `<header class="p-head">
       <span class="badge${p === "B" ? " b" : ""}" aria-hidden="true">${p}</span>
-      <div class="grow"><h3 id="p${p}-t">Partner ${p}</h3><p class="partner-sub" id="sub-${p}"></p></div>
-      ${p === "B" ? `<button type="button" class="icon-btn" id="remove-B" aria-label="Remove Partner B" title="Remove Partner B">${ICON.x}</button>` : ""}
+      <h3 class="grow" id="p${p}-t">Partner ${p}</h3>
+      ${p === "B" ? `<button type="button" class="icon-btn quiet" id="remove-B" aria-label="Remove Partner B" title="Remove Partner B">${ICON.x}</button>` : ""}
     </header>
-    ${["sal", "k", "emp", "roth"].map((k) => fieldHTML(k + p)).join("")}
-    <div class="toggle-row">
-      <div class="grow"><span class="tlabel" id="coast-l-${p}">Coast from an age</span><p class="fine" id="coast-h-${p}">Stop or cut ${p}'s saving at an age while ${other === "B" ? "B" : "A"}'s plan stays as set.</p></div>
-      <button type="button" class="switch" id="sw-coast-${p}" role="switch" aria-checked="false" aria-labelledby="coast-l-${p} p${p}-t" aria-describedby="coast-h-${p}"><i></i></button>
-    </div>
-    <div class="coast-sub" id="coast-sub-${p}" hidden>${fieldHTML("coastAge" + p)}${fieldHTML("after" + p)}</div>
-    <div class="partner-foot"><span id="foot-l-${p}">From Partner ${p}</span><b id="foot-${p}"></b></div>`;
+    ${fieldHTML("sal" + p)}
+    <p class="partner-foot"><span id="foot-l-${p}">Saving</span> <b id="foot-${p}"></b> <span class="partner-sub" id="sub-${p}"></span></p>
+    <details class="dis" id="d-partner${p}">
+      <summary class="sum stack"><span class="sum-t" id="sv-partner${p}-t">401(k), Roth &amp; coasting</span><span class="sum-v" id="sv-partner${p}"></span></summary>
+      <div class="dis-body">
+        ${["k", "emp", "roth"].map((k) => fieldHTML(k + p)).join("")}
+        <div class="toggle-row">
+          <div class="grow"><span class="tlabel" id="coast-l-${p}">Coast from an age</span><p class="fine" id="coast-h-${p}">Stop or cut ${p}'s saving at an age while ${other === "B" ? "B" : "A"}'s plan stays as set.</p></div>
+          <button type="button" class="switch" id="sw-coast-${p}" role="switch" aria-checked="false" aria-labelledby="coast-l-${p} p${p}-t" aria-describedby="coast-h-${p}"><i></i></button>
+        </div>
+        <div class="coast-sub" id="coast-sub-${p}" hidden>${fieldHTML("coastAge" + p)}${fieldHTML("after" + p)}</div>
+      </div>
+    </details>`;
 }
 
 function buildInputs() {
-  $("hh-fields").innerHTML = ["age", "retAge", "assets", "spend", "draw"].map(fieldHTML).join("");
+  $("hh-fields").innerHTML = ["age", "retAge", "assets", "spend"].map(fieldHTML).join("");
+  $("draw-fields").innerHTML = fieldHTML("draw");
   $("assume-fields").innerHTML = ["nominal", "inflation", "swr"].map(fieldHTML).join("");
   $("card-A").innerHTML = partnerHTML("A");
   $("card-B").innerHTML = partnerHTML("B");
@@ -111,14 +123,11 @@ function buildInputs() {
   $("bridge").innerHTML = `
     <div class="teaser" id="br-teaser"></div>
     <div id="br-full" hidden>
-      <div class="card-head"><div class="grow"><h2 id="br-title">Early-access bridge</h2><p class="fine">Money you can reach each year until 59½</p></div><span class="chip" id="br-chip"></span></div>
+      <div class="card-head"><div class="grow"><h2 id="br-title" class="visually-hidden">Early-access bridge</h2><p class="fine">Money you can reach each year until 59½</p></div></div>
       <div id="br-fields">${["preShare", "sepShare", "sepRate", "basis", "taxable", "lead"].map(fieldHTML).join("")}</div>
       <div id="br-out"></div>
     </div>`;
-  $("hh-fields").querySelector(".field").classList.add("first");
-  $("assume-fields").querySelector(".field").classList.add("first");
-  $("hsa-fields").querySelector(".field").classList.add("first");
-  $("br-fields").querySelector(".field").classList.add("first");
+  for (const id of ["hh-fields", "assume-fields", "draw-fields", "hsa-fields", "br-fields"]) $(id).querySelector(".field").classList.add("first");
 }
 
 // ---------- loading and saving ----------
@@ -251,7 +260,8 @@ function showNote(key) {
   $("n-" + key).textContent = n.err || ageMsg || n.adj;
   field.classList.toggle("invalid", bad);
   if (bad) box.setAttribute("aria-invalid", "true"); else box.removeAttribute("aria-invalid");
-  if (bad && field.closest("details")) field.closest("details").open = true;
+  // An error inside a closed section opens it (and every section around it).
+  if (bad) for (let d = field.closest("details"); d; d = d.parentElement.closest("details")) setOpen(d, true);
 }
 
 function showAll() {
@@ -425,7 +435,11 @@ function renderHero(res) {
 
   const nudge = $("nudge");
   nudge.hidden = !st.nudge;
+  $("d-nudge").hidden = !st.nudge;
   if (st.nudge) {
+    const line = UI.nudgeLine(res);
+    $("nudge-line").textContent = line;
+    $("nudge-sr").textContent = UI.spoken(line) + " Details.";
     const together = two() ? " together" : "";
     const items = [`save about <b>${kRound(res.requiredAnnual)}/yr</b>${together} (now ${kRound(res.start.total)})`];
     items.push(res.retireLater ? `retire at <b>${res.retireLater}</b> instead of ${R}` : "retire later");
@@ -442,6 +456,7 @@ function renderHero(res) {
   $("ring-fill").style.visibility = pc > 0 ? "" : "hidden"; // a 0-length round cap draws a stray dot
   $("ring-num").textContent = txt;
   $("ring").setAttribute("aria-label", badAges ? "Progress not shown until the ages are fixed" : `${txt} of today's Coast FIRE number`);
+  $("sv-kpis").textContent = UI.kpiSummary(res);
 
   if (badAges) {
     // Nothing below means anything with a negative horizon.
@@ -509,8 +524,11 @@ function renderInputs(res) {
     ? (v.two ? "Family coverage: one shared account and one limit. It keeps going until the last partner coasts."
       : "Family coverage: one account and one limit. It keeps going until you coast.")
     : v.two ? "Self-only coverage: an account each with its own limit, split evenly here; each half follows its partner." : "Self-only coverage.";
-  $("assume-vals").textContent = `${v.nominal.toFixed(1)}% · ${v.inflation.toFixed(1)}% · ${v.swr.toFixed(1)}%`;
-  $("assume-vals").setAttribute("aria-label", `return ${v.nominal.toFixed(1)}%, inflation ${v.inflation.toFixed(1)}%, withdrawal ${v.swr.toFixed(1)}%`);
+  const as = UI.assumeSummary(v);
+  $("assume-vals").textContent = as.text;
+  $("assume-vals").setAttribute("aria-label", as.label);
+  $("sv-draw").textContent = UI.drawSummary(res);
+  $("sv-hsa").textContent = UI.hsaSummary(v);
   $("h-retAge").textContent = v.retAge < 59.5 ? "Before 59½: see the early-access bridge below." : "Set it below 59½ to plan an early-access bridge.";
   $("h-nominal").textContent = `Before inflation. Real return: ${(res.r * 100).toFixed(2)}% a year.`;
   $("h-inflation").textContent = "Everything is shown in today's dollars.";
@@ -520,12 +538,16 @@ function renderInputs(res) {
 
   // One-person mode speaks to "you"; Partner A/B only when there are two.
   $("pA-t").textContent = v.two ? "Partner A" : "You";
-  $("card-A").querySelector(".card-head .badge").hidden = !v.two;
+  $("card-A").querySelector(".p-head .badge").hidden = !v.two;
   for (const p of ["A", "B"]) {
     const b = CF.partnerBase(v, p), sal = v["sal" + p];
     const solo = !v.two && p === "A";
     const whose = solo ? "your" : `${p}'s`;
-    $("sub-" + p).textContent = `Saving ${money(b.total)}/yr` + (sal > 0 ? ` · ${pct1(b.total / sal)} of pay` : "");
+    // One total line under the salary: "Saving $X/yr · Y% of pay".
+    $("foot-" + p).textContent = `${money(b.total)}/yr`;
+    $("sub-" + p).textContent = sal > 0 ? `· ${pct1(b.total / sal)} of pay` : "";
+    $("sv-partner" + p).textContent = UI.partnerSummary(v, p);
+    $("sv-partner" + p + "-t").textContent = solo ? "Your 401(k), Roth & coasting" : `${p}'s 401(k), Roth & coasting`;
     $("h-k" + p).textContent = (sal > 0 ? `${pct1(v["k" + p] / sal)} of salary. ` : "") + "Age 50+ can add $8,000 ($11,250 at 60–63); not modeled.";
     $("h-emp" + p).textContent = `= ${money(b.employer)}/yr. Match plus any other employer money.`;
     $("h-roth" + p).textContent = "Income limits and the 50+ catch-up aren't modeled.";
@@ -536,13 +558,25 @@ function renderInputs(res) {
     $("coast-h-" + p).textContent = on ? `On: ${solo ? "you cut" : p + " cuts"} saving from ${Math.max(ca, v.age)}.` : `Stop or cut ${whose} saving at an age.`;
     $("h-coastAge" + p).textContent = ca <= v.age ? "At or before your current age: coasting from today."
       : ca >= v.retAge ? `At or after retirement (${v.retAge}): no effect.` : "";
-    $("h-after" + p).textContent = `Share of ${whose} ${money(b.total)}/yr that continues after coasting, employer money included.`;
-    const afterAmt = b.total * v["after" + p] / 100;
-    $("foot-" + p).textContent = `${money(b.total)}/yr`;
-    const from = solo ? "From you" : `From Partner ${p}`;
-    $("foot-l-" + p).textContent = on && ca < v.retAge ? `${from}, then ${money(afterAmt)}/yr from ${Math.max(ca, v.age)}` : from;
+    const kept = UI.afterCoast(v, p);
+    $("h-after" + p).textContent = `Share of ${whose} ${money(b.total)}/yr that continues after coasting, employer money included` +
+      (on && kept > 0.5 ? ` = ${money(kept)}/yr after coasting.` : ".");
+    $("foot-l-" + p).textContent = "Saving";
   }
   for (const k of NUM_KEYS) showNote(k);
+}
+
+// The (i) next to a label shows only when that field has a hint that is hidden by default.
+function syncInfo() {
+  for (const k of NUM_KEYS) {
+    const h = $("h-" + k), b = $("i-" + k);
+    const none = h.classList.contains("keep") || !h.textContent.trim();
+    b.hidden = none;
+    if (none && h.closest(".field").classList.contains("show-hint")) {
+      h.closest(".field").classList.remove("show-hint");
+      b.setAttribute("aria-expanded", "false");
+    }
+  }
 }
 
 // ---------- main chart ----------
@@ -575,14 +609,14 @@ function drawChart() {
   $("chart-empty").hidden = !empty;
   $("chart-empty").textContent = res.warnings.includes("tooLarge") ? "Too large to show." : "Retirement age must be after your current age.";
   $("chart-title").textContent = res.warnings.includes("retAgeNotAfterAge") ? "Your path" : `Your path to ${v.retAge}`;
-  $("chart-sub").textContent = `Today's dollars · ${v.nominal.toFixed(1)}% return, ${v.inflation.toFixed(1)}% inflation = ${(res.r * 100).toFixed(2)}% real`;
+  // One short line: the real return. How it's derived is in the chart's label and the Returns row.
+  $("chart-sub").textContent = `${(res.r * 100).toFixed(2)}% real return · today's dollars`;
   if (empty) { svg.innerHTML = ""; geo = null; $("readout").textContent = ""; return; }
 
   const pts = res.points, n = pts.length - 1;
   // Never coast: the x-axis runs past retirement when full-pace saving gets there later.
   const xEnd = chartEnd(res);
   const nc = res.neverCoast, ncPts = nc.points.filter((p) => p.age <= xEnd);
-  if (xEnd > v.retAge) $("chart-sub").textContent += ` · never-coast line runs on to ${xEnd}`;
   let yMax = res.fire;
   for (const p of pts) yMax = Math.max(yMax, p.balance, p.coastLine, p.noContrib);
   for (const p of ncPts) yMax = Math.max(yMax, p.balance);
@@ -804,7 +838,7 @@ function drawChart() {
   svg.innerHTML = s;
   geo = { x, y, W, H, T, B, L, Rm, span, last: xEnd - v.age, ncPts };
   $("keep-key").textContent = keepKeyText(res);
-  svg.setAttribute("aria-label", `Chart from age ${v.age} to ${xEnd}. Your plan reaches ${cmp(res.balanceAtRet)} at ${v.retAge} against a FIRE number of ${cmp(res.fire)}. ${neverCoastWords(res)} ${$("headline").textContent}`);
+  svg.setAttribute("aria-label", `Chart from age ${v.age} to ${xEnd}, in today's dollars at a ${(res.r * 100).toFixed(2)}% real return (${v.nominal.toFixed(1)}% return, ${v.inflation.toFixed(1)}% inflation). Your plan reaches ${cmp(res.balanceAtRet)} at ${v.retAge} against a FIRE number of ${cmp(res.fire)}. ${neverCoastWords(res)} ${$("headline").textContent} Use the left and right arrow keys to step through ages, Home and End to jump, Escape to clear.`);
   showHover(hover === null ? null : Math.min(hover, geo.last));
 }
 
@@ -829,14 +863,16 @@ function neverCoastWords(res) {
   return `Saving at full pace and never coasting, you could retire at about ${nc.wholeAge}.`;
 }
 
-function readoutHTML(age, p, k) {
+// At rest (nobody dragging or stepping) the row is quiet: the age and the two values, no gap,
+// since the chip and the chart's own labels already say how far off the plan is.
+function readoutHTML(age, p, k, rest) {
   let s = `<b>Age ${age}</b>`;
   if (p) {
     const diff = p.balance - p.coastLine;
     s += `<span><i class="key k-proj"></i>Projected ${cmp(p.balance)}</span>` +
       `<span><i class="key k-coast"></i>Coast line ${cmp(p.coastLine)}</span>`;
     // The gap is the plan's distance to the coast line: keep it next to those two, before "Keep saving".
-    s += `<span class="gap ${diff >= 0 ? "up" : "down"}">plan ${cmp(Math.abs(diff))} ${diff >= 0 ? "above" : "below"} coast line</span>`;
+    if (!rest) s += `<span class="gap ${diff >= 0 ? "up" : "down"}">plan ${cmp(Math.abs(diff))} ${diff >= 0 ? "above" : "below"} coast line</span>`;
     if (k && Math.abs(k.balance - p.balance) > 0.5) s += `<span><i class="key k-keep"></i>Keep saving ${cmp(k.balance)}</span>`;
   } else if (k) {
     const d = k.balance - result.fire, ok = d >= -0.5;
@@ -852,7 +888,8 @@ function showHover(i) {
   const pts = result.points, n = pts.length - 1;
   const idx = i === null ? n : i, age = result.inputs.age + idx;
   const p = pts[idx], k = geo.ncPts[idx];
-  $("readout").innerHTML = readoutHTML(age, p, k);
+  $("readout").innerHTML = readoutHTML(age, p, k, i === null);
+  $("readout").classList.toggle("rest", i === null);
   const g = $("hover");
   if (!g) return;
   if (i === null) { g.innerHTML = ""; return; }
@@ -876,7 +913,16 @@ function wireChart() {
   // The readout is announced for keyboard moves only; dragging would flood a screen reader.
   const live = (on) => $("readout").setAttribute("aria-live", on ? "polite" : "off");
   svg.addEventListener("pointermove", (e) => { live(false); hoverAtPointer(e); });
-  svg.addEventListener("pointerdown", (e) => { live(false); hoverAtPointer(e); });
+  // The drag hint goes away after the first use, and stays away on this device.
+  let hintSeen = store.get(UI.HINT_KEY) === "1";
+  $("chart-hint").hidden = hintSeen;
+  const seen = () => {
+    if (hintSeen) return;
+    hintSeen = true;
+    $("chart-hint").hidden = true;
+    store.set(UI.HINT_KEY, "1");
+  };
+  svg.addEventListener("pointerdown", (e) => { seen(); live(false); hoverAtPointer(e); });
   svg.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") showHover(null); });
   svg.addEventListener("blur", () => showHover(null));
   svg.addEventListener("keydown", (e) => {
@@ -889,6 +935,7 @@ function wireChart() {
     else if (e.key === "End") i = last;
     else if (e.key === "Escape") { showHover(null); return; }
     else return;
+    seen();
     e.preventDefault();
     live(true);
     showHover(i);
@@ -903,8 +950,27 @@ function wireChart() {
   });
   let raf = 0;
   const redraw = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => result && drawAllCharts()); };
-  if (window.ResizeObserver) new ResizeObserver(redraw).observe($("chart"));
+  // Only a change of width redraws: opening or closing a section changes #deeper's height, not its width.
+  const widths = new Map();
+  const onResize = (entries) => {
+    let changed = false;
+    for (const en of entries) {
+      const w = Math.round(en.contentRect.width);
+      if (widths.get(en.target) !== w) { widths.set(en.target, w); changed = true; }
+    }
+    if (changed) redraw();
+  };
+  if (window.ResizeObserver) { const ro = new ResizeObserver(onResize); ro.observe($("chart")); ro.observe($("deeper")); }
   else window.addEventListener("resize", redraw);
+  // Legend: three keys shown; the keys for the other lines (already drawn) behind "Other lines".
+  $("legend-more").addEventListener("click", () => setLegendOpen($("legend-x").hidden, true));
+}
+
+function setLegendOpen(open, save) {
+  $("legend-x").hidden = !open;
+  $("legend-more").setAttribute("aria-expanded", String(open));
+  $("legend-more").textContent = open ? "Hide key" : "Other lines";
+  if (save) saveOpen("legend-x", open);
 }
 
 function renderPathTable(res) {
@@ -930,7 +996,9 @@ function renderPathTable(res) {
 
 function renderContrib(res) {
   const v = res.inputs, svg = $("bars-svg");
-  const W = Math.max(260, svg.parentElement.clientWidth - 28);
+  $("sv-contrib").textContent = UI.contribSummary(res);
+  if (!shown($("d-contrib"))) return; // drawn when opened (a closed section measures 0 wide)
+  const W = Math.max(260, svg.parentElement.clientWidth);
   const rows = [];
   for (const p of v.two ? ["A", "B"] : ["A"]) {
     const b = res.base[p];
@@ -998,6 +1066,9 @@ function renderEarliest(res) {
     rows.push({ who: "both", title: "Stop saving", sub: "", badges: [] });
   }
   const bad = res.warnings.includes("retAgeNotAfterAge");
+  $("sv-ec").textContent = UI.ecSummary(res);
+  $("sv-spark").textContent = UI.sparkSummary(res);
+  $("d-spark").hidden = bad;
   $("spark-title").hidden = bad;
   if (bad) {
     // SPEC 6: no solver rows while the ages are invalid.
@@ -1032,7 +1103,8 @@ function renderEarliest(res) {
   const sparkTitle = `Balance at ${R} by the age you ${v.two ? "both " : ""}stop`;
   $("spark-title").textContent = sparkTitle;
   if (sw.length < 2) { svg.innerHTML = ""; return; }
-  const W = Math.max(240, svg.parentElement.clientWidth - 28), H = 92, T = 16, B = 16, Lp = 4, Rp = 4;
+  if (!shown($("d-spark"))) return; // drawn when opened
+  const W = Math.max(240, svg.parentElement.clientWidth), H = 92, T = 16, B = 16, Lp = 4, Rp = 4;
   let lo = Math.min(res.fire, ...sw.map((p) => p.balance)), hi = Math.max(res.fire, ...sw.map((p) => p.balance));
   const pad = (hi - lo) * 0.08 || hi * 0.05 || 1;
   lo -= pad; hi += pad;
@@ -1085,7 +1157,11 @@ function heatClass(years) { return years <= 0 ? "h1" : years <= 4 ? "h2" : years
 
 function renderHeat(res, g) {
   const v = res.inputs;
-  if (res.warnings.includes("retAgeNotAfterAge")) { $("heat").innerHTML = ""; $("heat-note").textContent = ""; $("heat-scale").hidden = true; return; }
+  $("sv-heat").textContent = UI.heatSummary(res, g);
+  if (!shown($("d-heat"))) return; // built when opened
+  const badAges = res.warnings.includes("retAgeNotAfterAge");
+  $("d-heatkey").hidden = badAges;
+  if (badAges) { $("heat").innerHTML = ""; $("heat-note").textContent = ""; $("heat-scale").hidden = true; return; }
   $("heat-scale").hidden = false;
   const R = v.retAge, both = v.two ? "both " : "";
   const curCol = g.cols.findIndex((w) => Math.abs(w - v.swr) < 1e-9);
@@ -1129,29 +1205,41 @@ function renderHeat(res, g) {
 function renderBridge(res, br) {
   const v = res.inputs;
   const teaser = $("br-teaser"), full = $("br-full");
+  // The row's own line, plus (before 59½) a chip and a teaser sentence shown above it.
+  const bs = UI.bridgeSummary(res, br);
+  $("sv-bridge-t").textContent = bs.title;
+  $("sv-bridge").textContent = bs.value;
+  $("br-peek").hidden = !bs.chip;
+  $("br-hero").hidden = !bs.chip;
+  if (bs.chip) {
+    const chip = (id) => `<span class="chip ${bs.chip.kind}" id="${id}">${ICON[bs.chip.kind === "bad" ? "alert" : "check"]}${esc(bs.chip.text)}</span>`;
+    $("br-peek-chip").outerHTML = chip("br-peek-chip");
+    $("br-peek-t").textContent = bs.teaser;
+    // The same status in the answer card, so an early retirement age shows it next to the result.
+    $("br-hero-chip").outerHTML = chip("br-hero-chip");
+  }
   $("bridge").setAttribute("aria-labelledby", br.applies ? "br-title" : "br-teaser-t");
   if (!br.applies) {
     full.hidden = true;
     teaser.hidden = false;
-    if (br.reason === "badAges") { teaser.innerHTML = `<h2 id="br-teaser-t">Retiring before 59½?</h2><p>Fix the ages above first.</p>`; return; }
+    if (br.reason === "badAges") { teaser.innerHTML = `<h2 id="br-teaser-t" class="visually-hidden">Retiring before 59½?</h2><p>Fix the ages above first.</p>`; return; }
     const tryAge = v.age < 55 ? 55 : null;
     teaser.innerHTML = br.reason === "tooYoung"
-      ? `<h2 id="br-teaser-t">Retiring before 59½?</h2><p>The 72(t) life-expectancy table here covers starting ages 30 to 60, so the bridge isn't drawn for retiring at ${v.retAge}.</p>`
-      : `<h2 id="br-teaser-t">Retiring before 59½?</h2><p>401(k) and IRA money usually costs a 10% penalty before 59½. Set a retirement age under 59½ to plan a bridge with fixed 72(t) payments and a Roth conversion ladder, year by year.</p>${tryAge ? `<div class="actions"><button type="button" class="btn ghost sm" data-act="try55">Try retiring at ${tryAge}</button></div>` : ""}`;
+      ? `<h2 id="br-teaser-t" class="visually-hidden">Retiring before 59½?</h2><p>The 72(t) life-expectancy table here covers starting ages 30 to 60, so the bridge isn't drawn for retiring at ${v.retAge}.</p>`
+      : `<h2 id="br-teaser-t" class="visually-hidden">Retiring before 59½?</h2><p>401(k) and IRA money usually costs a 10% penalty before 59½. Set a retirement age under 59½ to plan a bridge with fixed 72(t) payments and a Roth conversion ladder, year by year.</p>${tryAge ? `<div class="actions"><button type="button" class="btn ghost sm" data-act="try55">Try retiring at ${tryAge}</button></div>` : ""}`;
     return;
   }
   teaser.hidden = true;
   full.hidden = false;
   const gaps = br.gapYears.length;
-  $("br-chip").outerHTML = gaps
-    ? `<span class="chip bad" id="br-chip">${ICON.alert}${gaps} short year${gaps === 1 ? "" : "s"}</span>`
-    : `<span class="chip good" id="br-chip">${ICON.check}No gaps</span>`;
+  // No chip in the body: the one above the row (and in the answer card) already says it.
   // Live hints on the bridge inputs.
   $("h-preShare").textContent = `401(k)s and traditional IRAs as a share of the ${cmp(br.portfolio)} portfolio at ${v.retAge}: ${cmp(br.preTax)}.`;
   $("h-sepShare").innerHTML = `72(t) IRA ${cmp(br.pot72)} · ladder IRA ${cmp(br.potLadder)}. Separate IRAs, so no dollar counts twice. <button type="button" class="linkish" data-act="size72">Size 72(t) to cover spending (${br.shareToCover}%)</button>`;
   const est = CF.rothBasisEstimate(values);
   $("h-basis").innerHTML = `What you've put into Roth IRAs (not growth); you can take it out at any age. Your Roth inputs add about ${cmp(est)} by ${v.retAge}.` +
     (est > 0 ? ` <button type="button" class="linkish" data-act="basis">Use ${cmp(est)}</button>` : "");
+  if (!shown($("d-bridge"))) return; // the timeline and bars are drawn when opened
 
   const R = v.retAge, lockTo = br.lockEnd, endAge = 59.5;
   const lockTxt = lockTo === 59.5 ? "59½" : String(lockTo);
@@ -1284,6 +1372,94 @@ if (window.IntersectionObserver) {
 $("peek").addEventListener("click", () => {
   $("results").scrollIntoView({ behavior: reduceMotion.matches ? "auto" : "smooth", block: "start" });
 });
+// The bridge note in the answer card: the reader asked for it, so opening it is remembered.
+$("br-hero-go").addEventListener("click", () => {
+  const d = $("d-bridge");
+  d.open = true;
+  d.querySelector(":scope > summary").focus({ preventScroll: true });
+  ($("br-peek").hidden ? d : $("br-peek")).scrollIntoView({ behavior: reduceMotion.matches ? "auto" : "smooth", block: "start" });
+});
+
+// ---------- collapsed sections ----------
+// Native <details>. Which ones are open is remembered on this device (UI.UI_KEY), apart from
+// the numbers: reset, Undo and shared links never change it.
+
+let uiOpen = {};
+function saveOpen(id, open) {
+  uiOpen = UI.withOpen(uiOpen, id, open);
+  store.set(UI.UI_KEY, JSON.stringify(uiOpen));
+}
+// Open, and every section around it open too (a closed section's contents measure 0 wide).
+function shown(el) {
+  for (let d = el.closest("details"); d; d = d.parentElement.closest("details")) if (!d.open) return false;
+  return true;
+}
+function applyUiState() {
+  const raw = store.get(UI.UI_KEY);
+  uiOpen = UI.parseOpen(raw);
+  // Wide screens: the numbers start open (there's room for them) until the reader closes them.
+  // Each section falls back to its own default unless the reader has opened or closed it.
+  const wide = !!(window.matchMedia && window.matchMedia("(min-width: 860px)").matches);
+  const dflt = { "d-kpis": wide };
+  for (const d of document.querySelectorAll("details[id]")) setOpen(d, UI.isOpenIn(uiOpen, d.id, dflt[d.id]));
+  setLegendOpen(UI.isOpenIn(uiOpen, "legend-x", false), false);
+}
+document.addEventListener("toggle", (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLDetailsElement) || !d.id) return;
+  // Only the reader's own opens and closes are remembered, not the page's.
+  if (autoToggle.has(d.id)) autoToggle.delete(d.id);
+  else if (uiOpen[d.id] !== d.open) saveOpen(d.id, d.open);
+  if (d.open) {
+    // Content opens below its summary; nothing is scrolled. Draw what was skipped while closed,
+    // right away (the toggle event already runs after the section is open and laid out).
+    if (result) { renderContrib(result); renderEarliest(result); renderBridge(result, bridgeRes); renderHeat(result, gridRes); syncInfo(); }
+  } else {
+    // Closing a long section can leave its summary above the screen: bring it back, no further.
+    const sum = d.querySelector(":scope > summary");
+    if (sum && sum.getBoundingClientRect().top < 0) sum.scrollIntoView({ block: "nearest", behavior: reduceMotion.matches ? "auto" : "smooth" });
+  }
+}, true);
+
+// Opened or closed by the page, not the reader: the next toggle event isn't saved.
+const autoToggle = new Set();
+function setOpen(d, open) {
+  if (d.open === !!open) return;
+  if (d.id) autoToggle.add(d.id);
+  d.open = !!open;
+}
+
+// A button that changes a field in a closed section (Apply, Size 72(t), Use basis, Try 55):
+// open that section only if it is the button's own or comes after it on the page, so nothing
+// above the reader moves; otherwise flash its summary row.
+function revealFields(btn, keys) {
+  for (const k of keys) {
+    const el = $("f-" + k);
+    if (!el) continue;
+    for (let d = el.closest("details"); d; d = d.parentElement.closest("details")) {
+      if (d.open) continue;
+      if (d.contains(btn) || (btn.compareDocumentPosition(d) & Node.DOCUMENT_POSITION_FOLLOWING)) setOpen(d, true);
+      else flashRow(d);
+    }
+  }
+}
+function flashRow(d) {
+  const sum = d.querySelector(":scope > summary");
+  if (!sum) return;
+  sum.classList.remove("flash");
+  void sum.offsetWidth; // restart the animation
+  sum.classList.add("flash");
+  setTimeout(() => sum.classList.remove("flash"), 1500);
+}
+
+// The (i) buttons: show or hide that field's hint.
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button.info");
+  if (!b) return;
+  const f = b.closest(".field"), on = !f.classList.contains("show-hint");
+  f.classList.toggle("show-hint", on);
+  b.setAttribute("aria-expanded", String(on));
+});
 
 // ---------- update ----------
 
@@ -1292,6 +1468,7 @@ function drawAllCharts() {
   renderContrib(result);
   renderEarliest(result);
   renderBridge(result, bridgeRes);
+  syncInfo();
 }
 
 function update() {
@@ -1348,8 +1525,14 @@ $("share-top").addEventListener("click", doShare);
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-apply],[data-act]");
   if (!t || t.disabled) return;
-  if (t.dataset.apply) { applyCoast(t.dataset.apply); return; }
+  if (t.dataset.apply) {
+    const ps = t.dataset.apply === "both" ? (values.two ? ["A", "B"] : ["A"]) : [t.dataset.apply];
+    revealFields(t, ps.map((p) => "coastAge" + p));
+    applyCoast(t.dataset.apply);
+    return;
+  }
   const act = t.dataset.act;
+  revealFields(t, [{ basis: "basis", size72: "sepShare", try55: "retAge" }[act]].filter(Boolean));
   const before = { ...values };
   const undo = () => toastButton("Undo", () => { values = before; showAll(); update(); toast(); });
   if (act === "basis") { values.basis = Math.round(CF.rothBasisEstimate(values) / 1000) * 1000; showAll(); userChanged(); toast("Roth basis set from your Roth inputs. ", undo()); }
@@ -1371,6 +1554,7 @@ window.addEventListener("hashchange", () => {
 // ---------- start ----------
 
 buildInputs();
+applyUiState(); // before the first update, so closed sections skip their drawing
 const initialShared = sharedFromHash();
 values = initialShared || loadSaved();
 for (const k of NUM_KEYS) wireField(k);

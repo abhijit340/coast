@@ -16,7 +16,7 @@ Nothing the user types leaves the device. A test fails on any dollar amount not 
 - Plain static HTML + CSS + vanilla JS. No build step, frameworks, CDN, external fonts or analytics.
 - Files: `index.html`, `style.css`, `calc.js` (pure math, UMD: `window.CoastFire` / `module.exports`),
   `app.js` (DOM, SVG charts, storage), `sw.js` (network-first, cached fallback after 3 s; cache
-  `coast-fire-v3`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
+  `coast-fire-v4`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
   `tests/run_tests.js`, `README.md`, `SPEC.md`.
 - Mobile-first at 375px: one column, max-width 420px, 16px gutters plus safe-area insets, no
   horizontal scroll. At 860px and up: inputs on the left (340–400px), results on the right.
@@ -88,6 +88,13 @@ KPI tiles (2×2), each with a line of its own maths: **FIRE number** ("$71,000 �
 balance-at-retirement figure; ▲ surplus / ▼ short with icon and word, plus the plan, e.g. "saving to
 65" or "plan as entered: A coasts at 55"; the tile turns bad when short), **Meets the coast line** (first whole age the
 plan as entered is at/above the coast line; labelled separately from the solved both-coast age).
+A fifth, full-width tile, **Never coast: earliest retirement** (with the dashed teal line key), gives
+the first whole age at which saving at full pace and never coasting reaches the FIRE number ("About 75"),
+with the yearly saving rounded like the headline ("Saving about $23K/yr together, never coasting, you pass
+$1.78M during age 74, so you could retire at about 75"; "you reach $X at N" when it lands on a year-end)
+and, on its own line, how it compares to the chosen retirement age (▲ "N yrs before your chosen R" /
+✓ "right at your chosen R" / ▼ "N yrs after your chosen R"). Already there: "Now". Never by the end of
+the search (`top` = max(100, R, today's age)): "Not by {top}".
 
 Sticky bottom bar on phones (hidden ≥860px and while the answer card is on screen): mini ring with
 its percent + "Both coast at 62 · At 65 $X ▼ $Y short" (icon + word) + "Result ↑".
@@ -128,11 +135,44 @@ Closed form for the tests (both coast at c, after = 0, no draw, k = c − age):
   held as entered. Shown with "N yrs coasting", or "Not possible" + reason.
   With after = 0 and no draw, `earliest.both == crossAge`; otherwise they can differ and both show.
 - `requiredAnnual = (FIRE − A (1+r)^n) / ((1+r)^n − 1) × r` (r = 0: `(FIRE − A)/n`).
-- `retireLater`: smallest R′ ≤ retAge + 30 at which saving the whole way reaches FIRE.
+- `retireLater`: when `earliest.both` is null, the never-coast `wholeAge` (the same full-saving
+  recurrence, so the nudge and the Never coast tile always agree); null when that is null too (the nudge
+  then just says "retire later").
 - `spendWithin = fullBalance × swr`.
+- `neverCoast = neverCoastAge(v, fire, r, maxAge = 100)` → `{age, wholeAge, yearly, points}`: keep
+  saving at full pace and never coast. Every partner keeps their full pre-coast saving (401(k),
+  employer, Roth, HSA: `yearly = C` with nobody coasting, constant in today's dollars), coast ages and
+  the Barista draw are ignored, and the household keeps working past `retAge` if needed:
+  `B_0 = assets`, `B_{k+1} = max(0, B_k (1 + r) + C)` for every whole age up to
+  `top = max(age, retAge, 100)` (returned as `top`). `wholeAge` = first
+  whole age with `B ≥ FIRE`; `age` interpolates linearly between the two year-ends around the crossing,
+  `age = a − 1 + (FIRE − B_{a−1}) / (B_a − B_{a−1})` (the current age when already there today). Never
+  by `top` → both null ("Not by {top}"). Closed form for the tests:
+  `B_k = A (1+r)^k + C ((1+r)^k − 1)/r`. When `earliest.both` is null, `retireLater == wholeAge` by
+  construction (both null when FIRE isn't reached by `top`).
 - `sweep`: balance at retirement for every common coast age (sparkline).
 - `grid`: earliest both-coast age for nominal return input ±2 points (rows) × SWR 3.0/3.5/4.0/4.5/5.0
   (columns); unreachable cells report `best / FIRE`.
+
+**Heatmap ("What if returns or withdrawals differ?") layout.** A real `<table>`:
+- visible `<caption>` above the grid, one plain sentence on what a cell means: "Each number is the
+  earliest age you could both stop saving and still reach your FIRE number by R ("Now" = today)."
+  (all cells unreachable: "Each cell is the share of your FIRE number you'd have at R, saving the
+  whole way.");
+- header row 1: a column-axis title `<th scope="colgroup">` "Safe withdrawal rate →" spanning the
+  columns, with a rule under it; the corner `<th scope="col" rowspan="2">` is the row-axis title
+  "Investment return, before inflation ↓" (horizontal text in the corner, above the row headers, so it
+  reads the same on a phone);
+- header row 2: "3.0% SWR" … "5.0% SWR" (value + small unit line); row headers "9.0% return" … ;
+  the header of the user's own row and column is in ink;
+- the user's cell is outlined and labelled "your inputs" inside the cell (and in its aria-label); when
+  the SWR is between columns, a note says no cell is marked and the middle row is the user's return;
+- a legend below, in words: "Shade = years coasting before R" + the 5-step ramp with bins and
+  "← stop later · stop sooner →" (direction, not lightness, since the ramp flips in dark mode); a hatched swatch "Hatched = can't reach your FIRE number
+  by R, even saving the whole way. The % is how much of it you'd have."; an outlined swatch
+  "Outlined = your inputs" (a surface-coloured swatch with the ink outline, so it matches coloured and
+  hatched cells). The card subtitle is a short framing line ("Same plan, a different market or
+  withdrawal rate."); the table caption carries what a cell means.
 
 ## 5. Early-access bridge (retAge < 59½)
 
@@ -167,6 +207,7 @@ Closed form for the tests (both coast at c, after = 0, no draw, k = c − age):
 |---|---|
 | retAge ≤ age | Field invalid; chip "Check ages"; ring and all four KPI tiles "—" ("Fix the ages first", no good/bad tile colour); chart empty state titled "Your path"; one muted line instead of the solver rows and no sparkline; heatmap and its legend hidden. |
 | r = 0 | Annuity factor = n; no division by zero. |
+| Never coast doesn't reach FIRE by `top` (100, or R / today's age when later) | Tile "Not by {top}"; nudge "retire later" with no age; no crossing dot; the x-axis stays at R. |
 | r < 0 | Allowed; warning "Your return is below inflation…". |
 | spend = 0 | FIRE 0, coasting now. |
 | Over legal limit | Clamped with the 2026-limit note. HSA re-clamped when coverage or partner count changes. |
@@ -198,6 +239,20 @@ ink labelled "coast line" at the left, stop-today dashed with an inline label th
 fit, FIRE reference line as a muted hairline labelled, coasting band (no wash under the projection),
 A/B pins with alternating labels; all labels are placed together so none overlap, first x tick "age N", crossing dot, end value label, "Short $X" bracket at the right edge, a
 readout bar above the plot that is aria-live, crosshair, ←/→/Home/End, "Show as a table");
+plus the **keep saving, never coast** line (`--keep`, the validated teal series step #20917a / dark
+#2aa384, dashed 7–3, in the legend as "Keep saving, never coast", with "(same as your plan to R)" when
+nobody coasts). It is drawn from where it leaves the plan (at R when nobody coasts). When its FIRE age
+is after R the x-axis runs to `min(top, wholeAge + 2)`, a dotted hairline and a bold tick mark R, the
+never-coast age always gets a tick (other ticks within 22px of it are dropped), the subtitle adds
+"· never-coast line runs on to {end}", and only this line continues past R. A teal dot sits where it
+meets the FIRE line, labelled "Keep saving → retire at N", placed clear of the projection and
+never-coast lines when it can be; when already at FIRE today there is no dot or label (the tile says
+"Now"). The projection's end label and the coast-pin labels also try spots clear of the never-coast line
+first. The readout shows the plan's gap right after Projected / Coast line ("plan $X below coast
+line"), then "Keep saving $X" where it differs from the plan, and past R shows "Keep saving $X · still
+working past R · $Y over/under FIRE"; the table gains a "Never coast" column and rows to the end of the
+axis, ✓ on the first age at the FIRE number. Its note sits above the scroll box; at ≤480px amounts are
+compact and the Age column is sticky;
 progress ring; per-partner stacked bars with a 0/$5K/$10K axis; earliest-coast rows with Apply
 buttons (only next to a solved age) and a sparkline zoomed to the data (no "$0" baseline unless the
 scale reaches 0; the title says where the scale starts; the "reaches FIRE" zone is a neutral wash); heatmap as a real `<table>` with focusable cells;
@@ -253,6 +308,13 @@ Hand-checked with a 0% real return (nominal = inflation) so every value adds up 
   FIRE 400,000 → not possible (best 380,000), needs 30,000/yr, retire at 51, spend 19,000.
   Solved "now" while still saving: 50% kept after coasting = 13,000 + 1,000 HSA = 14,000/yr; with
   200,000 invested the solver says 40 but the money alone stays under the coast number (`after` > 0).
+- Never coast: 0% real, 100,000 + 28,000/yr against 400,000 → crosses at 50 + 20/28 = 50.71, first whole
+  age 51 (= retire later at 51), same with coast ages and a draw switched on; closed form at 5% real
+  from 0 saving 10,000/yr: FIRE = B_10 → exactly 50, FIRE at the continuous 10.5-year mark →
+  interpolated between B_10 and B_11, first whole age 51; already past FIRE → today; FIRE 0 → today;
+  nothing saved, or a negative real return that levels off below FIRE → null; search capped at 100;
+  search runs to R when R > 100 and to today's age past 100; age 75 / R 85 / nothing invested →
+  null and retireLater null (not 110); defaults → 75.
 - 72(t) rate: above 5% is flagged (`rateOverCap`), 5% is not.
 - 72(t): $1,000,000 at 45, 5%, LE 41.0 → $57,822.29; 0% rate → balance / LE; lock 52 → 59½, 57 → 62.
 - Bridge: retire at 52 with 1,000,000 all pre-tax, half to 72(t) → 30,772.60/yr; spend 40,000,

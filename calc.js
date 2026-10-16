@@ -267,6 +267,46 @@
     return { age: null, years: 0, best: balanceAtRet(v, make(v.retAge), r) };
   }
 
+  const NEVER_COAST_MAX_AGE = 100;
+
+  /**
+   * "Keep saving at full pace, never coast": every partner keeps their full
+   * pre-coast saving (401(k), employer, Roth IRA, HSA) every year, coast ages and
+   * the Barista draw are ignored, and the household keeps working past the chosen
+   * retirement age if it has to. When does the balance first reach `fire`?
+   *
+   *   neverCoastAge(v, fire, r, maxAge = 100)
+   *     v: sanitized inputs, fire: FIRE number, r: real return (decimal).
+   *     The search runs to top = max(v.age, maxAge, v.retAge), so it always covers
+   *     the chosen retirement age and starts no earlier than today.
+   *   -> { age, wholeAge, yearly, points, top }
+   *     age: fractional age, interpolated linearly between the two year-ends
+   *          around the crossing (v.age when already there today), or null when
+   *          the balance never reaches `fire` by `top`;
+   *     wholeAge: first whole age whose year-end balance is at or above `fire`
+   *          (Math.ceil of `age`), or null;
+   *     yearly: the constant real yearly saving used;
+   *     points: [{age, balance}] for every whole age from v.age to top;
+   *     top: the last age searched.
+   */
+  function neverCoastAge(v, fire, r, maxAge) {
+    const top = Math.max(v.age, v.retAge, maxAge === undefined ? NEVER_COAST_MAX_AGE : maxAge);
+    const yearly = contribAt(v, fullPlanOf(v), v.age).total; // constant in today's dollars
+    const tol = 1e-9 * Math.max(1, Math.abs(fire));
+    const points = [];
+    let B = v.assets, age = null, wholeAge = null;
+    for (let a = v.age; a <= top; a++) {
+      points.push({ age: a, balance: B });
+      if (age === null && B >= fire - tol) {
+        const prev = points.length > 1 ? points[points.length - 2].balance : null;
+        age = prev === null || B <= prev ? a : (a - 1) + Math.min(1, Math.max(0, (fire - prev) / (B - prev)));
+        wholeAge = a;
+      }
+      if (a < top) B = Math.max(0, B * (1 + r) + yearly);
+    }
+    return { age, wholeAge, yearly, points, top };
+  }
+
   /** The whole calculation. Inputs use the page's units (ages, dollars, percent). */
   function project(inputs) {
     const san = sanitize(inputs);
@@ -315,14 +355,12 @@
       sweep.push({ age: c, balance: balanceAtRet(v, planOf(v, o), r) });
     }
 
-    // Other ways out when nothing works: retire later, or spend less.
-    let retireLater = null;
-    if (n > 0 && earliest.both.age === null) {
-      for (let R = v.retAge + 1; R <= Math.min(FIELDS.retAge.max, v.retAge + 30); R++) {
-        const w = { ...v, retAge: R };
-        if (balanceAtRet(w, fullPlanOf(w), r) >= fire) { retireLater = R; break; }
-      }
-    }
+    // Never coast: the age full-pace saving first reaches the FIRE number (may be after retAge).
+    const neverCoast = neverCoastAge(v, fire, r);
+    // Other ways out when nothing works: retire later, or spend less. "Retire later" is the
+    // never-coast age (the same full-saving recurrence), so the nudge and the tile always agree.
+    const retireLater = n > 0 && earliest.both.age === null && neverCoast.wholeAge !== null && neverCoast.wholeAge > v.retAge
+      ? neverCoast.wholeAge : null;
     const spendWithin = fullBalance * v.swr / 100;
 
     const headline = [fire, coastNow, balance, noContribAtRet, fullBalance];
@@ -332,7 +370,7 @@
     return {
       inputs: v, hsaClamped: san.hsaClamped, r, years: n, fire, coastNow, reached, plan,
       points, balanceAtRet: balance, surplus: balance - fire, noContribAtRet, crossAge,
-      base, start, earliest, fullBalance, requiredAnnual, sweep, retireLater, spendWithin,
+      base, start, earliest, fullBalance, requiredAnnual, sweep, retireLater, spendWithin, neverCoast,
       firstCoast: firstCoastAge(plan), warnings,
     };
   }
@@ -578,8 +616,9 @@
 
   const api = {
     LIMITS, SINGLE_LIFE, DEFAULTS, FIELDS, KEYS, HASH_KEYS, SLIDER_STEPS, GRID_SWR, SEASON, SEP_RATE_FLOOR,
+    NEVER_COAST_MAX_AGE,
     realReturn, fireNumber, coastNumber, annuityFactor, hsaLimit, parseNumber, cleanField, sanitize,
-    partnerBase, planOf, fullPlanOf, contribAt, path, balanceAtRet, earliestCoast, project, grid,
+    partnerBase, planOf, fullPlanOf, contribAt, path, balanceAtRet, earliestCoast, neverCoastAge, project, grid,
     lifeExpectancy, sepPayment, sepLockEnd, bridge, rothBasisEstimate,
     fmtMoney, fmtCompact, encodeHash, decodeHash, sliderToValue, valueToSlider, niceRound,
   };

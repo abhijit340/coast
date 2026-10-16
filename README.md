@@ -13,7 +13,8 @@ It's a static page: plain HTML, CSS and JavaScript, with no build step, framewor
 - **Partners A and B** (stack on phones): salary, 401(k), employer %, Roth IRA, and an optional "Coast from an age" with "Keep saving after coasting" (% of before). The × or the Two incomes switch makes it a one-person plan. Legal limits show as a tick and label on the slider; typing over one clamps with a note.
 - **HSA:** one row for the household; Family (one $8,750 limit) or Self-only ($4,400 each).
 - **Earliest coast age:** solved for both together and for each partner alone (the other's plan held as set), each with an **Apply** button that sets the coast switches and ages.
-- **What if:** a return × withdrawal-rate table of earliest coast ages, coloured by years of coasting; cells that can't make it show the % of the FIRE number reached.
+- **Your path (main chart):** your plan, the coast line, "if you stop today", and a dashed teal **Keep saving, never coast** line: everyone keeps their full saving for good (no coast ages, no Barista draw), working past the retirement age if needed. A dot marks where it reaches the FIRE number ("Keep saving → retire at 75"), and the age axis runs past retirement far enough to show it. The **Never coast** tile says "you could retire at about N" and how that compares with your chosen age (or "Not by 100"). Drag or use the arrow keys for a readout; **Show as a table** lists every age.
+- **What if returns or withdrawals differ?** A real table: rows are the investment return before inflation, columns the safe withdrawal rate, each header with its unit, and a caption saying what a cell means (the earliest age you could both stop saving). Shade = years of coasting, hatched = can't reach the FIRE number even saving the whole way (the % shows how much you'd have), and the cell for your own inputs is outlined and labelled "your inputs". A legend under the table explains all three.
 - **Retire before 59½:** shown when the retirement age is under 59½ (otherwise a teaser card). Splits pre-tax money into a 72(t) IRA and a ladder IRA, then shows each year to 59½: 72(t) (fixed, locked), taxable, Roth basis, ripe ladder rungs, and any gap year with the amount.
 - Inputs are remembered in this browser only (`localStorage` key `coastfire.v2`). **Reset** (top right, or below the inputs) restores the defaults, with Undo. **Copy link** puts the numbers after `#` (on a phone, the share sheet), e.g. `#a=42&r=65&b=45000&s=71000&sa=62608&ka=4800`. Opening a link shows its numbers with a banner and leaves your saved numbers alone until you edit or keep them. v1 links still open.
 
@@ -25,7 +26,7 @@ It's a static page: plain HTML, CSS and JavaScript, with no build step, framewor
 | `style.css` | Styles; light and dark follow the system setting |
 | `calc.js` | All the math, pure functions, no DOM. `window.CoastFire` in the browser, `require("./calc.js")` in node. Holds the 2026 limits and the IRS Single Life Table (ages 30–60) |
 | `app.js` | Builds the fields, keeps boxes and sliders in sync, writes results, draws the SVG charts, saves inputs |
-| `sw.js` | Service worker: network first, saved copy after 3 s or offline. Bump `CACHE` (now `coast-fire-v3`) whenever the files change |
+| `sw.js` | Service worker: network first, saved copy after 3 s or offline. Bump `CACHE` (now `coast-fire-v4`) whenever the files change |
 | `manifest.webmanifest`, `icons/` | Home-screen install. `python tools/make_icons.py` (needs Pillow) redraws the icons |
 | `privacy.html` | Privacy note |
 | `tests/run_tests.js` | Tests |

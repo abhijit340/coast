@@ -63,6 +63,7 @@
         <div class="kpi"><dt>Coast number today</dt><dd id="k-coast"></dd><dd class="kpi-note" id="k-coast-n"></dd></div>
         <div class="kpi" id="k-ret-tile"><dt id="k-ret-l">At 65, your plan</dt><dd id="k-ret"></dd><dd class="kpi-note" id="k-ret-n"></dd></div>
         <div class="kpi"><dt>Meets the coast line</dt><dd id="k-cross"></dd><dd class="kpi-note" id="k-cross-n"></dd></div>
+        <div class="kpi kpi-wide" id="k-never-tile"><dt><i class="key k-keep" aria-hidden="true"></i>Never coast: earliest retirement</dt><dd id="k-never"></dd><dd class="kpi-note" id="k-never-n"></dd></div>
       </dl>
       <p id="warn" class="warn" hidden></p>
     </section>
@@ -71,6 +72,7 @@
       <div class="card-head"><div class="grow"><h2 id="chart-title">Your path to 65</h2><p class="fine" id="chart-sub"></p></div></div>
       <ul class="legend" aria-hidden="true">
         <li><i class="key k-proj"></i>Projected, your plan</li>
+        <li><i class="key k-keep"></i><span id="keep-key">Keep saving, never coast</span></li>
         <li><i class="key k-coast"></i>Coast line</li>
         <li><i class="key k-stop"></i><span id="stop-key">If you stop today</span></li>
         <li><i class="key k-fire"></i>FIRE number</li>
@@ -85,6 +87,7 @@
         <p class="fine">Drag across the chart, or focus it and use the arrow keys.</p>
         <button type="button" class="linkish" id="table-toggle" aria-expanded="false" aria-controls="path-table">Show as a table</button>
       </div>
+      <p class="fine table-note" id="path-note" hidden></p>
       <div id="path-table" class="table-wrap" hidden></div>
     </section>
   </div>
@@ -149,12 +152,14 @@
     </section>
 
     <section class="card" aria-labelledby="hm-title">
-      <div class="card-head"><div class="grow"><h2 id="hm-title">What if returns or withdrawals differ?</h2><p class="fine" id="hm-sub">Earliest age you could both stop · outlined = your inputs</p></div></div>
+      <div class="card-head"><div class="grow"><h2 id="hm-title">What if returns or withdrawals differ?</h2><p class="fine" id="hm-sub">Same plan, a different market or withdrawal rate.</p></div></div>
       <div class="heat-wrap" id="heat"></div>
-      <div class="scale" id="heat-scale" aria-hidden="true">
-        <span class="ramp-wrap" id="heat-ramp"><span>Years coasting</span>
-          <span class="ramp"><span><i class="h1"></i>0</span><span><i class="h2"></i>1–4</span><span><i class="h3"></i>5–9</span><span><i class="h4"></i>10–14</span><span><i class="h5"></i>15+</span></span></span>
-        <span class="none-key"><i></i><span id="none-key-t">% of FIRE reached</span></span>
+      <div class="scale" id="heat-scale" role="group" aria-label="How to read the table">
+        <div class="ramp-wrap" id="heat-ramp"><span class="scale-t" id="ramp-t">Shade = years coasting before 65</span>
+          <span class="ramp" aria-hidden="true"><span><i class="h1"></i>0</span><span><i class="h2"></i>1–4</span><span><i class="h3"></i>5–9</span><span><i class="h4"></i>10–14</span><span><i class="h5"></i>15+</span></span>
+          <span class="ramp-ends" aria-hidden="true"><span>← stop later</span><span>stop sooner →</span></span></div>
+        <p class="key-row"><i class="none-sw" aria-hidden="true"></i><span id="none-key-t">Hatched = can't reach your FIRE number by 65, even saving the whole way. The % is how much of it you'd have.</span></p>
+        <p class="key-row"><i class="cur-sw" aria-hidden="true"></i><span>Outlined = your inputs</span></p>
       </div>
       <p class="hint" id="heat-note"></p>
     </section>

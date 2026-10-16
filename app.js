@@ -445,7 +445,7 @@ function renderHero(res) {
 
   if (badAges) {
     // Nothing below means anything with a negative horizon.
-    for (const k of ["fire", "coast", "ret", "cross"]) { $("k-" + k).textContent = "—"; $("k-" + k + "-n").textContent = "Fix the ages first"; }
+    for (const k of ["fire", "coast", "ret", "cross", "never"]) { $("k-" + k).textContent = "—"; $("k-" + k + "-n").textContent = "Fix the ages first"; }
     $("k-ret-l").textContent = "At retirement, your plan";
     $("k-ret-tile").classList.remove("bad", "good");
     $("warn").hidden = true;
@@ -468,6 +468,24 @@ function renderHero(res) {
   $("k-cross").textContent = c === null ? `Not by ${R}` : c <= v.age ? "Now" : String(c);
   $("k-cross-n").textContent = c === null ? "your plan stays below the coast line"
     : (res.earliest.both.age !== null && c !== res.earliest.both.age ? `your plan; the solved stop age is ${res.earliest.both.age}` : "first age your plan is at or above it");
+
+  // Never coast: keep every partner's full saving, past the chosen retirement age if needed.
+  const nc = res.neverCoast;
+  const keepWords = `Saving about ${kRound(nc.yearly)}/yr${two() ? " together" : ""}, never coasting`;
+  if (nc.age === null) {
+    $("k-never").textContent = `Not by ${nc.top}`;
+    $("k-never-n").innerHTML = `${keepWords}, you don't reach ${cmp(res.fire)} by ${nc.top}.`;
+  } else if (nc.age <= v.age) {
+    $("k-never").textContent = "Now";
+    $("k-never-n").innerHTML = `You already have your ${cmp(res.fire)} FIRE number, so you could retire today.`;
+  } else {
+    const d = nc.wholeAge - R;
+    const cmpR = d === 0 ? `<span class="delta up">${ICON.check}right at your chosen ${R}</span>`
+      : d < 0 ? `<span class="delta up">${ICON.up}${-d} yr${d === -1 ? "" : "s"} before your chosen ${R}</span>`
+      : `<span class="delta down">${ICON.down}${d} yr${d === 1 ? "" : "s"} after your chosen ${R}</span>`;
+    $("k-never").textContent = `About ${nc.wholeAge}`;
+    $("k-never-n").innerHTML = `${keepWords}, ${nc.age >= nc.wholeAge ? `you reach ${cmp(res.fire)} at ${nc.wholeAge}, so you could retire then` : `you pass ${cmp(res.fire)} during age ${nc.wholeAge - 1}, so you could retire at about ${nc.wholeAge}`}.<span class="delta-line">${cmpR}</span>`;
+  }
 
   const warn = [];
   if (res.warnings.includes("negativeRealReturn")) warn.push("Your return is below inflation, so your money loses value over time.");
@@ -503,7 +521,6 @@ function renderInputs(res) {
   // One-person mode speaks to "you"; Partner A/B only when there are two.
   $("pA-t").textContent = v.two ? "Partner A" : "You";
   $("card-A").querySelector(".card-head .badge").hidden = !v.two;
-  $("hm-sub").textContent = `Earliest age you could ${v.two ? "both " : ""}stop · outlined = your inputs`;
   for (const p of ["A", "B"]) {
     const b = CF.partnerBase(v, p), sal = v["sal" + p];
     const solo = !v.two && p === "A";
@@ -562,15 +579,20 @@ function drawChart() {
   if (empty) { svg.innerHTML = ""; geo = null; $("readout").textContent = ""; return; }
 
   const pts = res.points, n = pts.length - 1;
+  // Never coast: the x-axis runs past retirement when full-pace saving gets there later.
+  const xEnd = chartEnd(res);
+  const nc = res.neverCoast, ncPts = nc.points.filter((p) => p.age <= xEnd);
+  if (xEnd > v.retAge) $("chart-sub").textContent += ` · never-coast line runs on to ${xEnd}`;
   let yMax = res.fire;
   for (const p of pts) yMax = Math.max(yMax, p.balance, p.coastLine, p.noContrib);
+  for (const p of ncPts) yMax = Math.max(yMax, p.balance);
   if (!(yMax > 0)) yMax = 1;
   const yStep = niceStep(yMax * 1.1 / 4);
   const yTop = Math.ceil(yMax * 1.1 / yStep) * yStep;
   const ticks = [];
   for (let t = 0; t <= yTop + yStep / 2; t += yStep) ticks.push(t);
   const L = Math.max(...ticks.map((t) => textW(CF.fmtCompact(t)))) + 8, Rm = 10, T = 12, B = 22;
-  const span = Math.max(1, v.retAge - v.age);
+  const span = Math.max(1, xEnd - v.age);
   const x = (age) => L + (age - v.age) / span * (W - L - Rm);
   const y = (val) => T + (1 - val / yTop) * (H - T - B);
   const line = (key) => pts.map((p, i) => `${i ? "L" : "M"}${x(p.age).toFixed(1)} ${y(p[key]).toFixed(1)}`).join("");
@@ -590,15 +612,29 @@ function drawChart() {
   let xStep = span > 40 ? 10 : span > 12 ? 5 : span > 5 ? 2 : 1;
   if (W < 360 && span > 60) xStep = 20;
   const ages = new Set([v.age, v.retAge]);
-  for (let a = Math.ceil(v.age / xStep) * xStep; a <= v.retAge; a += xStep) ages.add(a);
+  for (let a = Math.ceil(v.age / xStep) * xStep; a <= xEnd; a += xStep) ages.add(a);
   const firstTick = `age ${v.age}`, firstW = textW(firstTick) + 10;
+  const extended = xEnd > v.retAge;
+  // Extended axis: always tick the never-coast age, so the crossing has a label under it.
+  const ncTick = extended && nc.wholeAge !== null && nc.wholeAge <= xEnd ? nc.wholeAge : null;
+  if (ncTick !== null) ages.add(ncTick);
+  const kept = (a) => a === v.age || a === v.retAge || a === ncTick;
   for (const a of [...ages].sort((p, q) => p - q)) {
-    if (a !== v.age && a !== v.retAge && (x(a) - x(v.age) < firstW || x(v.retAge) - x(a) < 22)) continue;
-    s += `<text class="tick" x="${x(a).toFixed(1)}" y="${H - B + 14}" text-anchor="${a === v.age ? "start" : a === v.retAge ? "end" : "middle"}">${a === v.age ? firstTick : a}</text>`;
+    if (!kept(a) && (x(a) - x(v.age) < firstW || Math.abs(x(v.retAge) - x(a)) < 22 ||
+      (ncTick !== null && Math.abs(x(ncTick) - x(a)) < 22) || x(xEnd) - x(a) < 8)) continue;
+    const anchor = a === v.age ? "start" : x(a) > W - Rm - 12 ? "end" : "middle";
+    s += `<text class="tick${a === v.retAge && extended ? " tick-ret" : ""}" x="${x(a).toFixed(1)}" y="${H - B + 14}" text-anchor="${anchor}">${a === v.age ? firstTick : a}</text>`;
   }
+  // Past retirement the chart shows only the never-coast line; a hairline marks the chosen age.
+  if (extended) s += `<line class="ret-line" x1="${x(v.retAge).toFixed(1)}" x2="${x(v.retAge).toFixed(1)}" y1="${T}" y2="${H - B}"/>`;
   // Lines (no wash under the projection, so the shaded band means only "coasting").
   s += `<path class="l-stop" d="${line("noContrib")}"/>`;
   s += `<path class="l-coast" d="${line("coastLine")}"/>`;
+  // Keep saving, never coast: drawn from where it leaves the plan (at retirement when nobody coasts).
+  let ncFrom = ncPts.findIndex((p, k) => k > n || Math.abs(p.balance - pts[k].balance) > 0.5);
+  ncFrom = ncFrom < 0 ? ncPts.length : Math.max(0, ncFrom - 1);
+  const keepPts = ncPts.slice(ncFrom);
+  if (keepPts.length > 1) s += `<path class="l-keep" d="${keepPts.map((p, i) => `${i ? "L" : "M"}${x(p.age).toFixed(1)} ${y(p.balance).toFixed(1)}`).join("")}"/>`;
   s += `<path class="l-proj" d="${line("balance")}"/>`;
   // FIRE number reference line, labelled directly.
   const fy = y(res.fire);
@@ -607,10 +643,15 @@ function drawChart() {
   // no label placed before it (and, for the inline line labels, no line).
   const placed = [];
   const plotW = W - L - Rm;
+  const lineKeys = ["balance", "coastLine", "noContrib", "keep"];
   const lineY = (key, px) => {
-    if (n < 1) return y(pts[0][key]);
-    const a = Math.max(0, Math.min(n, (px - L) / plotW * span)), i = Math.min(n - 1, Math.floor(a)), f = a - i;
-    return y(pts[i][key] * (1 - f) + pts[i + 1][key] * f);
+    const vals = key === "keep" ? ncPts.map((p) => p.balance) : pts.map((p) => p[key]);
+    const last = vals.length - 1, a = Math.max(0, (px - L) / plotW * span);
+    if (a > last + 1e-9) return -1e9; // that line has ended
+    if (key === "keep" && a < ncFrom) return -1e9; // not drawn there
+    if (last < 1) return y(vals[0]);
+    const i = Math.min(last - 1, Math.floor(a)), f = a - i;
+    return y(vals[i] * (1 - f) + vals[i + 1] * f);
   };
   const boxOf = (tx, ty, text, px, anchor, lines = 1) => {
     const w = textW(text, px), x0 = anchor === "end" ? tx - w : anchor === "middle" ? tx - w / 2 : tx;
@@ -619,8 +660,11 @@ function drawChart() {
   const overlaps = (a, b) => a.x0 < b.x1 + 2 && b.x0 < a.x1 + 2 && a.y0 < b.y1 + 1 && b.y0 < a.y1 + 1;
   const crossesLine = (b, keys) => {
     if (fy > b.y0 - 1 && fy < b.y1 + 1) return true;
-    for (let px = Math.max(L, b.x0); px <= Math.min(W - Rm, b.x1); px += 4) {
-      for (const k of keys) { const ly = lineY(k, px); if (ly > b.y0 - 1 && ly < b.y1 + 1) return true; }
+    // Every 4px plus both edges, so a steep line clipping a corner is still caught.
+    const x0 = Math.max(L, b.x0), x1 = Math.min(W - Rm, b.x1);
+    for (let px = x0; px <= x1 + 3.999; px += 4) {
+      const qx = Math.min(px, x1);
+      for (const k of keys) { const ly = lineY(k, qx); if (ly > b.y0 - 1 && ly < b.y1 + 1) return true; }
     }
     return false;
   };
@@ -647,8 +691,30 @@ function drawChart() {
     placed.push(boxOf(ex - 6, fy + 13, shortText, 11, "end"));
     endY = ey - fy > 36 ? ey - 8 : Math.min(H - B - 3, ey + 15);
   }
-  endSvg += `<text class="end-label halo" x="${(ex - 6).toFixed(1)}" y="${endY.toFixed(1)}" text-anchor="end">${endText}</text>`;
-  placed.push(boxOf(ex - 6, endY, endText, 11, "end"));
+  // Placed clear of the never-coast line where it can be (it branches off the plan before R).
+  const endCands = [endY, endY - 13, ey + 15, endY + 13, ey - 21].filter((yy, i, a) => a.indexOf(yy) === i && yy <= H - B - 3)
+    .map((yy) => ({ box: boxOf(ex - 6, yy, endText, 11, "end"),
+      svg: `<text class="end-label halo" x="${(ex - 6).toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="end">${endText}</text>` }));
+  const endPick = endCands.find((k) => fits(k.box, ["keep", "balance"])) || endCands.find((k) => fits(k.box, ["keep"])) || endCands[0];
+  placed.push(endPick.box);
+  endSvg += endPick.svg;
+  // Where saving at full pace (never coasting) first reaches the FIRE number.
+  // Already at FIRE today: no dot or label (the tile says "Now"), since the balance sits above the line.
+  if (nc.age !== null && nc.age > v.age && nc.age <= xEnd) {
+    const kx = x(nc.age), right0 = kx < (L + W) / 2;
+    s += `<circle class="dot-keep" cx="${kx.toFixed(1)}" cy="${fy.toFixed(1)}" r="5"/>`;
+    const c = [];
+    // The full wording first; on a narrow chart, the short "retire at N" (the legend names the line).
+    // Last, the short one set a little further out, clear of a steep line through the dot.
+    for (const [text, gap] of [[`Keep saving → retire at ${nc.wholeAge}`, 8], [`retire at ${nc.wholeAge}`, 8], [`retire at ${nc.wholeAge}`, 30]]) {
+      for (const yy of [fy - 9, fy + 16, fy - 22, fy + 29, fy - 35, fy + 42]) for (const right of [right0, !right0]) {
+        const tx = right ? kx + gap : kx - gap, anchor = right ? "start" : "end";
+        c.push({ box: boxOf(tx, yy, text, 11, anchor), svg: `<text class="ann halo" x="${tx.toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="${anchor}">${text}</text>` });
+      }
+    }
+    // Clear of the projection and the never-coast line if possible; else the first spot.
+    if (!place(c, lineKeys) && !place(c, ["balance", "keep"])) { c[0].must = true; place(c); }
+  }
   // Partner coast points: a pin on the baseline and a label, on alternating sides.
   const pins = [];
   for (const p of v.two ? ["A", "B"] : ["A"]) {
@@ -682,8 +748,7 @@ function drawChart() {
       svg: `<text class="ann halo" x="${(left ? px - 5 : px + 5).toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="${left ? "end" : "start"}">${label}</text>` });
     const prefLeft = i % 2 === 0 ? px - L > lw + 8 : px > W - Rm - lw - 8;
     const c = [cand(prefLeft, ly), cand(!prefLeft, ly), cand(prefLeft, ly - 13), cand(!prefLeft, ly - 13), cand(prefLeft, ly - 26), cand(!prefLeft, ly - 26)];
-    c[0].must = true;
-    place(c);
+    if (!place(c, ["keep", "balance"]) && !place(c, ["keep"])) { c[0].must = true; place(c); }
   });
   // Where the plan meets the coast line.
   if (res.crossAge !== null && !pins.some((p) => p.age === res.crossAge)) {
@@ -696,10 +761,9 @@ function drawChart() {
       const tx = right ? cx + 8 : cx - 8, anchor = right ? "start" : "end";
       c.push({ box: boxOf(tx, yy, text, 11, anchor), svg: `<text class="ann halo" x="${tx.toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="${anchor}">${text}</text>` });
     }
-    place(c); // no room: the dot stays, and the "Meets the coast line" tile gives the age
+    place(c, lineKeys) || place(c); // no room: the dot stays, and the "Meets the coast line" tile gives the age
   }
   s += endSvg;
-  const lineKeys = ["balance", "coastLine", "noContrib"];
   // The coasting band's label: bottom of the band, else its top, else just the word.
   if (zone) {
     const zx = x(zone.start), zw = x(v.retAge) - zx, cx = zx + zw / 2, rx = zx + zw - 3;
@@ -721,7 +785,7 @@ function drawChart() {
     for (const text of [`if you stop today: ${cmp(res.noContribAtRet)} at ${v.retAge}`, `stop today: ${cmp(res.noContribAtRet)}`]) {
       const w = textW(text, 10);
       for (const frac of [0.3, 0.15, 0.45, 0.05]) {
-        const lx = Math.max(L + 4, Math.min(x(v.age + span * frac), W - Rm - 60 - w));
+        const lx = Math.max(L + 4, Math.min(x(v.age + n * frac), x(v.retAge) - 60 - w));
         const ly = lineY("noContrib", lx);
         for (const yy of [ly - 6, ly + 12]) {
           cands.push({ box: boxOf(lx, yy, text, 10, "start"), svg: `<text class="end-label muted halo" x="${lx.toFixed(1)}" y="${yy.toFixed(1)}">${text}</text>` });
@@ -738,30 +802,65 @@ function drawChart() {
     svg: `<text class="ref-label coast-label halo" x="${L + 4}" y="${yy.toFixed(1)}">coast line</text>` })), lineKeys);
   s += `<g id="hover"></g>`;
   svg.innerHTML = s;
-  geo = { x, y, W, H, T, B, L, Rm, span };
-  svg.setAttribute("aria-label", `Chart from age ${v.age} to ${v.retAge}. Your plan reaches ${cmp(res.balanceAtRet)} against a FIRE number of ${cmp(res.fire)}. ${$("headline").textContent}`);
-  showHover(hover === null ? null : Math.min(hover, n));
+  geo = { x, y, W, H, T, B, L, Rm, span, last: xEnd - v.age, ncPts };
+  $("keep-key").textContent = keepKeyText(res);
+  svg.setAttribute("aria-label", `Chart from age ${v.age} to ${xEnd}. Your plan reaches ${cmp(res.balanceAtRet)} at ${v.retAge} against a FIRE number of ${cmp(res.fire)}. ${neverCoastWords(res)} ${$("headline").textContent}`);
+  showHover(hover === null ? null : Math.min(hover, geo.last));
 }
 
-function readoutHTML(p) {
-  const diff = p.balance - p.coastLine;
-  return `<b>Age ${p.age}</b><span><i class="key k-proj"></i>Projected ${cmp(p.balance)}</span>` +
-    `<span><i class="key k-coast"></i>Coast line ${cmp(p.coastLine)}</span>` +
-    `<span class="gap ${diff >= 0 ? "up" : "down"}">${cmp(Math.abs(diff))} ${diff >= 0 ? "above" : "below"}</span>`;
+// The last age on the chart: retirement, or later when saving at full pace (never
+// coasting) first reaches the FIRE number after it (plus room for its label), up to 100.
+function chartEnd(res) {
+  const v = res.inputs, nc = res.neverCoast;
+  if (nc.wholeAge === null || nc.wholeAge <= v.retAge) return v.retAge;
+  return Math.max(v.retAge, Math.min(nc.top, nc.wholeAge + 2));
+}
+
+const planCoastsBy = (res) => Number.isFinite(res.firstCoast) && res.firstCoast < res.inputs.retAge;
+function keepKeyText(res) {
+  return planCoastsBy(res) ? "Keep saving, never coast" : `Keep saving, never coast (same as your plan to ${res.inputs.retAge})`;
+}
+
+// One sentence on the never-coast age (chart label for screen readers).
+function neverCoastWords(res) {
+  const nc = res.neverCoast, v = res.inputs;
+  if (nc.age === null) return `Saving at full pace and never coasting doesn't reach the FIRE number by ${nc.top}.`;
+  if (nc.age <= v.age) return "You're already at the FIRE number today.";
+  return `Saving at full pace and never coasting, you could retire at about ${nc.wholeAge}.`;
+}
+
+function readoutHTML(age, p, k) {
+  let s = `<b>Age ${age}</b>`;
+  if (p) {
+    const diff = p.balance - p.coastLine;
+    s += `<span><i class="key k-proj"></i>Projected ${cmp(p.balance)}</span>` +
+      `<span><i class="key k-coast"></i>Coast line ${cmp(p.coastLine)}</span>`;
+    // The gap is the plan's distance to the coast line: keep it next to those two, before "Keep saving".
+    s += `<span class="gap ${diff >= 0 ? "up" : "down"}">plan ${cmp(Math.abs(diff))} ${diff >= 0 ? "above" : "below"} coast line</span>`;
+    if (k && Math.abs(k.balance - p.balance) > 0.5) s += `<span><i class="key k-keep"></i>Keep saving ${cmp(k.balance)}</span>`;
+  } else if (k) {
+    const d = k.balance - result.fire, ok = d >= -0.5;
+    s += `<span><i class="key k-keep"></i>Keep saving ${cmp(k.balance)}</span><span class="past">still working past ${result.inputs.retAge}</span>` +
+      `<span class="gap ${ok ? "up" : "down"}">${cmp(Math.abs(d))} ${ok ? "over" : "under"} FIRE</span>`;
+  }
+  return s;
 }
 
 function showHover(i) {
   if (!geo || !result) return;
   hover = i;
-  const pts = result.points;
-  const p = pts[i === null ? pts.length - 1 : i];
-  $("readout").innerHTML = readoutHTML(p);
+  const pts = result.points, n = pts.length - 1;
+  const idx = i === null ? n : i, age = result.inputs.age + idx;
+  const p = pts[idx], k = geo.ncPts[idx];
+  $("readout").innerHTML = readoutHTML(age, p, k);
   const g = $("hover");
   if (!g) return;
   if (i === null) { g.innerHTML = ""; return; }
-  const px = geo.x(p.age);
-  g.innerHTML = `<line class="xhair" x1="${px}" x2="${px}" y1="${geo.T}" y2="${geo.H - geo.B}"/>` +
-    `<circle class="dot-coast" cx="${px}" cy="${geo.y(p.coastLine)}" r="4"/><circle class="dot-proj" cx="${px}" cy="${geo.y(p.balance)}" r="4"/>`;
+  const px = geo.x(age);
+  let dots = "";
+  if (k && (!p || Math.abs(k.balance - p.balance) > 0.5)) dots += `<circle class="dot-keep" cx="${px}" cy="${geo.y(k.balance)}" r="4"/>`;
+  if (p) dots += `<circle class="dot-coast" cx="${px}" cy="${geo.y(p.coastLine)}" r="4"/><circle class="dot-proj" cx="${px}" cy="${geo.y(p.balance)}" r="4"/>`;
+  g.innerHTML = `<line class="xhair" x1="${px}" x2="${px}" y1="${geo.T}" y2="${geo.H - geo.B}"/>` + dots;
 }
 
 function hoverAtPointer(e) {
@@ -769,7 +868,7 @@ function hoverAtPointer(e) {
   const r = $("chart-svg").getBoundingClientRect();
   const sx = (e.clientX - r.left) * (geo.W / r.width);
   const age = result.inputs.age + (sx - geo.L) / (geo.W - geo.L - geo.Rm) * geo.span;
-  showHover(Math.max(0, Math.min(result.points.length - 1, Math.round(age - result.inputs.age))));
+  showHover(Math.max(0, Math.min(geo.last, Math.round(age - result.inputs.age))));
 }
 
 function wireChart() {
@@ -782,7 +881,7 @@ function wireChart() {
   svg.addEventListener("blur", () => showHover(null));
   svg.addEventListener("keydown", (e) => {
     if (!geo) return;
-    const last = result.points.length - 1;
+    const last = geo.last;
     let i = hover === null ? -1 : hover;
     if (e.key === "ArrowRight") i = Math.min(last, i + 1);
     else if (e.key === "ArrowLeft") i = i < 0 ? 0 : Math.max(0, i - 1);
@@ -797,6 +896,7 @@ function wireChart() {
   $("table-toggle").addEventListener("click", () => {
     const t = $("path-table"), open = t.hidden;
     t.hidden = !open;
+    $("path-note").hidden = !open;
     $("table-toggle").setAttribute("aria-expanded", String(open));
     $("table-toggle").textContent = open ? "Hide the table" : "Show as a table";
     if (open) renderPathTable(result);
@@ -809,8 +909,21 @@ function wireChart() {
 
 function renderPathTable(res) {
   if ($("path-table").hidden) return;
-  const rows = res.points.map((p) => `<tr><td>${p.age}</td><td>${money(p.balance)}</td><td>${money(p.coastLine)}</td><td>${p.contrib || p.draw ? money(p.contrib - p.draw) : "—"}</td><td>${money(p.noContrib)}</td></tr>`).join("");
-  $("path-table").innerHTML = `<table class="data"><caption class="visually-hidden">Projection by age, today's dollars</caption><thead><tr><th scope="col">Age</th><th scope="col">Projected</th><th scope="col">Coast line</th><th scope="col">Added that year</th><th scope="col">Stop today</th></tr></thead><tbody>${rows}</tbody></table>`;
+  const v = res.inputs, end = chartEnd(res), nc = res.neverCoast;
+  // Phones: compact amounts so all six columns fit without a sideways scroll.
+  const narrow = window.matchMedia("(max-width: 480px)").matches;
+  const m = narrow ? cmp : money;
+  const rows = [];
+  for (let a = v.age; a <= end; a++) {
+    const p = res.points[a - v.age], k = nc.points[a - v.age];
+    const keep = k ? m(k.balance) + (nc.wholeAge === a ? " ✓" : "") : "—";
+    rows.push(p
+      ? `<tr><td>${p.age}</td><td>${m(p.balance)}</td><td>${m(p.coastLine)}</td><td>${p.contrib || p.draw ? m(p.contrib - p.draw) : "—"}</td><td>${m(p.noContrib)}</td><td>${keep}</td></tr>`
+      : `<tr class="past-row"><td>${a}</td><td>—</td><td>—</td><td>—</td><td>—</td><td>${keep}</td></tr>`);
+  }
+  $("path-table").innerHTML = `<table class="data"><caption class="visually-hidden">Projection by age, today's dollars. The last column keeps saving at full pace and never coasts, working past ${v.retAge} if needed; a check mark is the first age it reaches the FIRE number.</caption><thead><tr><th scope="col">Age</th><th scope="col">Projected</th><th scope="col">Coast line</th><th scope="col">Added<br>that year</th><th scope="col">Stop<br>today</th><th scope="col">Never<br>coast</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+  // The note sits above the scroll box, so it is read before the rows, not after all of them.
+  $("path-note").textContent = `Never coast: ${kRound(nc.yearly)}/yr every year, no coast ages or Barista draw${end > v.retAge ? `, working past ${v.retAge}` : ""}. ✓ = first age at the FIRE number.`;
 }
 
 // ---------- contributions: stacked bars per partner ----------
@@ -929,7 +1042,7 @@ function renderEarliest(res) {
   const y = (b) => T + (1 - (b - lo) / (hi - lo)) * (H - T - B);
   let s = "";
   const firstOk = sw.find((p) => p.balance >= res.fire * (1 - 1e-6));
-  if (firstOk) s += `<rect class="ok-zone" aria-hidden="true" x=""${x(firstOk.age).toFixed(1)}" y="${T - 6}" width="${(x(R) - x(firstOk.age)).toFixed(1)}" height="${H - T - B + 6}"/>`;
+  if (firstOk) s += `<rect class="ok-zone" aria-hidden="true" x="${x(firstOk.age).toFixed(1)}" y="${T - 6}" width="${(x(R) - x(firstOk.age)).toFixed(1)}" height="${H - T - B + 6}"/>`;
   s += `<line class="fire-line" x1="${Lp}" x2="${W - Rp}" y1="${y(res.fire).toFixed(1)}" y2="${y(res.fire).toFixed(1)}"/>`;
   if (lo <= 0) s += `<line class="base" x1="${Lp}" x2="${W - Rp}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/>`;
   s += `<path class="l-spark" d="${sw.map((p, i) => `${i ? "L" : "M"}${x(p.age).toFixed(1)} ${y(p.balance).toFixed(1)}`).join("")}"/>`;
@@ -974,28 +1087,40 @@ function renderHeat(res, g) {
   const v = res.inputs;
   if (res.warnings.includes("retAgeNotAfterAge")) { $("heat").innerHTML = ""; $("heat-note").textContent = ""; $("heat-scale").hidden = true; return; }
   $("heat-scale").hidden = false;
+  const R = v.retAge, both = v.two ? "both " : "";
   const curCol = g.cols.findIndex((w) => Math.abs(w - v.swr) < 1e-9);
+  const pctTxt = (x) => (+x).toFixed(1) + "%";
   let none = 0;
-  const body = g.cells.map((row, i) => `<tr><th scope="row">${+g.rows[i].toFixed(2)}%</th>` + row.map((c, j) => {
-    const cur = i === 2 && j === curCol ? " cur" : "";
-    const head = `${+c.nominal.toFixed(2)}% return, ${c.swr}% withdrawal`;
+  const body = g.cells.map((row, i) => `<tr><th scope="row"${i === 2 ? ' class="cur-h"' : ""}>${pctTxt(g.rows[i])}<span class="u">return</span></th>` + row.map((c, j) => {
+    const isCur = i === 2 && j === curCol, cur = isCur ? " cur" : "";
+    const head = `${pctTxt(c.nominal)} return, ${pctTxt(c.swr)} withdrawal rate${isCur ? " (your inputs)" : ""}`;
+    const you = isCur ? `<span class="you" aria-hidden="true">your inputs</span>` : "";
     if (c.age === null) {
       none++;
       const p = Math.min(99, Math.floor(c.pctOfFire * 100));
-      return `<td class="none${cur}" tabindex="0" title="${head}: not by ${v.retAge}; saving the whole way reaches ${p}% of the FIRE number" aria-label="${head}: not by ${v.retAge}, ${p}% of FIRE reached">${p}%</td>`;
+      return `<td class="none${cur}" tabindex="0" title="${head}: not by ${R}; saving the whole way reaches ${p}% of the FIRE number" aria-label="${head}: can't stop saving and still retire at ${R}; saving the whole way reaches ${p}% of the FIRE number"><span class="n">${p}%</span>${you}</td>`;
     }
     const label = c.age <= v.age ? "Now" : c.age;
-    return `<td class="${heatClass(c.years)}${cur}" tabindex="0" title="${head}: both coast at ${label} (${c.years} years coasting)" aria-label="${head}: coast at ${label}, ${c.years} years coasting">${label}</td>`;
+    const yrs = `${c.years} year${c.years === 1 ? "" : "s"} coasting`;
+    return `<td class="${heatClass(c.years)}${cur}" tabindex="0" title="${head}: ${both}stop saving at ${label} (${yrs})" aria-label="${head}: ${both}stop saving at ${label}, ${yrs}"><span class="n">${label}</span>${you}</td>`;
   }).join("") + "</tr>").join("");
   const all = none === 25;
   // When no cell can make it, the years ramp means nothing; say what the grid shows instead.
   $("heat-ramp").hidden = all;
-  const lead = all ? `<p class="heat-all">None of these reach ${cmp(res.fire)} by ${v.retAge}, even saving the whole way. Each cell shows the share of the FIRE number reached.</p>` : "";
-  $("heat").innerHTML = `${lead}<p class="heat-axes">Rows: return before inflation · Columns: safe withdrawal rate${all ? "" : " · Number = age you could stop; shade = years coasting"}</p><table class="heat"><caption class="visually-hidden">Earliest age you could ${v.two ? "both " : ""}stop saving, by nominal return (rows) and withdrawal rate (columns)</caption>
-    <thead><tr><td></td>${g.cols.map((w) => `<th scope="col">${w}%</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
+  $("ramp-t").textContent = `Shade = years coasting before ${R}`;
+  $("none-key-t").textContent = `Hatched = can't reach your FIRE number by ${R}, even saving the whole way. The % is how much of it you'd have.`;
+  const lead = all ? `<p class="heat-all">None of these reach ${cmp(res.fire)} by ${R}, even saving the whole way.</p>` : "";
+  // One plain sentence on what a cell's number means, shown as the table's caption.
+  const meaning = all
+    ? `Each cell is the share of your ${cmp(res.fire)} FIRE number you'd have at ${R}, saving the whole way.`
+    : `Each number is the earliest age you could ${both}stop saving and still reach your FIRE number by ${R} (“Now” = today).`;
+  $("heat").innerHTML = `${lead}<table class="heat"><caption>${meaning}</caption>
+    <thead>
+      <tr><th scope="col" rowspan="2" class="ax-row">Investment return, before inflation&nbsp;↓</th><th scope="colgroup" colspan="${g.cols.length}" class="ax-col">Safe withdrawal rate&nbsp;→</th></tr>
+      <tr>${g.cols.map((w, j) => `<th scope="col"${j === curCol ? ' class="cur-h"' : ""}>${pctTxt(w)}<span class="u">SWR</span></th>`).join("")}</tr>
+    </thead><tbody>${body}</tbody></table>`;
   const notes = [];
-  if (none && !all) notes.push(`Hatched cells can't reach the FIRE number by ${v.retAge}; the % is how much of it saving the whole way would reach.`);
-  if (curCol < 0) notes.push(`Your ${v.swr.toFixed(1)}% withdrawal rate falls between the columns, so no cell is outlined.`);
+  if (curCol < 0) notes.push(`Your ${v.swr.toFixed(1)}% withdrawal rate falls between the columns, so no cell is marked “your inputs”; the middle row is your ${v.nominal.toFixed(1)}% return.`);
   $("heat-note").textContent = notes.join(" ");
 }
 

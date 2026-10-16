@@ -202,11 +202,81 @@ check("solver: with saving after coasting the age comes earlier", S4.earliest.bo
 check("sweep: later coast never lowers the balance", S1.sweep.every((s, i) => i === 0 || s.balance >= S1.sweep[i - 1].balance));
 check("sweep: one point per whole age", S1.sweep.length === 11 && S1.sweep[0].age === 40);
 
+// ---------- never coast: earliest retirement saving at full pace (SPEC 4.4) ----------
+// H0 at 0% real: 100,000 + 28,000 a year; FIRE 400,000. Year-ends 380,000 at 50 and 408K at 51,
+// so the line crosses at 50 + 20,000 / 28,000 = 50.714 (first whole age 51, same as "retire at 51").
+const NC1 = CF.neverCoastAge(CF.sanitize(H0).values, 400000, 0);
+eq("never coast: 0% real, crosses between year-ends at 50 + 20/28", NC1.age, 50 + 20000 / 28000, 1e-9);
+check("never coast: first whole age 51, saving 28,000 a year", NC1.wholeAge === 51 && near(NC1.yearly, 28000), J([NC1.wholeAge, NC1.yearly]));
+check("never coast: one point per whole age to 100", NC1.points.length === 61 && NC1.points[0].age === 40 &&
+  NC1.points[10].balance === 380000 && NC1.points[60].age === 100);
+const NC2 = CF.project({ ...H0, coastOnA: 1, coastOnB: 1, draw: 4000 });
+check("never coast: ignores coast ages and the Barista draw", near(NC2.neverCoast.age, NC1.age, 1e-9) && NC2.neverCoast.wholeAge === 51,
+  J(NC2.neverCoast.age));
+check("never coast: project() matches retireLater (saving the whole way)", T1.neverCoast.wholeAge === T1.retireLater);
+// Closed form with a constant real contribution: one person saving 10,000 a year from 0 at 5% real.
+// B_k = 10,000 x ((1.05)^k - 1) / 0.05. FIRE = B_10 exactly -> age 50.0 (10 years from 40).
+const ONE = CF.sanitize({ ...H0, two: 0, assets: 0, salA: 0, kA: 10000, empA: 0, rothA: 0, hsa: 0 }).values;
+const F10 = 10000 * CF.annuityFactor(0.05, 10);
+const NC3 = CF.neverCoastAge(ONE, F10, 0.05);
+check("never coast: closed form, FIRE = B_10 is reached at exactly 50", near(NC3.age, 50, 1e-9) && NC3.wholeAge === 50, J([NC3.age, NC3.wholeAge]));
+// FIRE where the continuous closed form crosses at 10.5 years: B_10 < FIRE < B_11, linear in between.
+const F105 = 10000 * CF.annuityFactor(0.05, 10.5);
+const NC4 = CF.neverCoastAge(ONE, F105, 0.05);
+const B10 = 10000 * CF.annuityFactor(0.05, 10), B11 = 10000 * CF.annuityFactor(0.05, 11);
+eq("never coast: closed form, interpolated between B_10 and B_11", NC4.age, 50 + (F105 - B10) / (B11 - B10), 1e-9);
+check("never coast: closed form, near the continuous 50.5 and first whole age 51", Math.abs(NC4.age - 50.5) < 0.05 && NC4.wholeAge === 51);
+check("never coast: closed form, every point matches B_k", NC4.points.slice(0, 30).every((p, k) => near(p.balance, 10000 * CF.annuityFactor(0.05, k), 1e-6)));
+// Already past FIRE today: 500,000 invested against 400,000 -> now (age 40).
+const NC5 = CF.neverCoastAge(CF.sanitize({ ...H0, assets: 500000 }).values, 400000, 0);
+check("never coast: already at FIRE today -> the current age", NC5.age === 40 && NC5.wholeAge === 40, J([NC5.age, NC5.wholeAge]));
+check("never coast: FIRE 0 -> today", CF.project({ ...H0, spend: 0 }).neverCoast.age === 40);
+// Never: nothing saved and 0% real; or a negative real return whose balance levels off below FIRE
+// (1,000 a year at -2.86% real tops out near 35K).
+const NONE = { ...H0, salA: 0, kA: 0, empA: 0, rothA: 0, salB: 0, kB: 0, empB: 0, rothB: 0, hsa: 0 };
+const NC6 = CF.neverCoastAge(CF.sanitize(NONE).values, 400000, 0);
+check("never coast: never reaches -> null (not before 100)", NC6.age === null && NC6.wholeAge === null && NC6.points.length === 61);
+const NC7 = CF.project({ ...NONE, assets: 0, hsa: 1000, nominal: 2, inflation: 5 });
+check("never coast: negative real return levels off below FIRE -> null", NC7.neverCoast.age === null &&
+  NC7.neverCoast.points[60].balance < 1000 / (1 - 1.02 / 1.05) + 1e-6);
+// The search stops at 100: 28,000 a year from 0 reaches 400,000 after 14.3 years, so starting at 90 it's too late.
+check("never coast: search capped at age 100", CF.neverCoastAge(CF.sanitize({ ...H0, age: 90, retAge: 95, assets: 0 }).values, 400000, 0).age === null &&
+  CF.neverCoastAge(CF.sanitize({ ...H0, age: 80, retAge: 95, assets: 0 }).values, 400000, 0).wholeAge === 95);
+check("never coast: interpolated age sits in the year before the first whole age", [0, 100000, 200000, 400000].every((a) => {
+  const nc = CF.project({ ...H0, assets: a }).neverCoast;
+  return nc.age !== null && nc.age <= nc.wholeAge && (nc.wholeAge === 40 || nc.age > nc.wholeAge - 1);
+}));
+// retireLater and the never-coast age come from one source, so they can't disagree past the cap:
+// defaults at 75 retiring at 85 with nothing invested never reach FIRE by 100 (the old 30-year search said 110).
+const OLD = CF.project({ age: 75, retAge: 85, assets: 0 });
+check("never coast: age 75 / retAge 85 / nothing invested -> null, and retireLater null too (not 110)",
+  OLD.earliest.both.age === null && OLD.neverCoast.wholeAge === null && OLD.retireLater === null && OLD.neverCoast.top === 100,
+  J([OLD.neverCoast.wholeAge, OLD.retireLater]));
+check("never coast: retireLater equals wholeAge whenever nothing works by retirement",
+  [{}, { assets: 0 }, { age: 60, retAge: 70 }, { spend: 90000 }, { age: 75, retAge: 85, assets: 0 }, { retAge: 50 }].every((o) => {
+    const P = CF.project(o);
+    return P.earliest.both.age !== null || P.retireLater === P.neverCoast.wholeAge;
+  }));
+// Late crossing beyond the old retAge + 30 window: 0% real, 28,000 a year from 0 against 400,000 at age 40
+// retiring at 41 -> crosses at 55 (14.3 years), well inside 100; retireLater follows it.
+const LATE = CF.project({ ...H0, retAge: 41, assets: 0, nominal: 0, inflation: 0 });
+check("never coast: retireLater follows the never-coast age", LATE.retireLater === LATE.neverCoast.wholeAge && LATE.retireLater === 55,
+  J([LATE.retireLater, LATE.neverCoast.wholeAge]));
+// The search covers the chosen horizon: retiring at 120 searches to 120; already 105 searches to 105 at least.
+const NC120 = CF.neverCoastAge(CF.sanitize({ ...H0, age: 90, retAge: 120, assets: 0 }).values, 400000, 0);
+check("never coast: search runs to retAge when it is past 100", NC120.top === 120 && NC120.points.length === 31 && NC120.wholeAge === 105,
+  J([NC120.top, NC120.wholeAge]));
+const NC105 = CF.neverCoastAge(CF.sanitize({ ...H0, age: 105, retAge: 104, assets: 0 }).values, 400000, 0);
+check("never coast: already past 100 -> top is today's age", NC105.top === 105 && NC105.age === null && NC105.points.length === 1);
+check("never coast: same as the plan's path when nobody coasts", T1.points.every((p, k) => near(p.balance, T1.neverCoast.points[k].balance)));
+
 // The defaults (US medians) are the not-on-course state; the page designs for it.
 const D = CF.project({});
 check("defaults: not on course by 65 (shortfall state)", D.earliest.both.age === null && D.surplus < 0);
 eq("defaults: FIRE number 71,000 / 4%", D.fire, 1775000);
 eq("defaults: household saves 22,784/yr", D.start.total, 2 * (4800 + 62608 * 0.043 + 3200) + 1400, 1e-6);
+check("defaults: never coasting, you could retire at 75 (same as retiring later)",
+  D.neverCoast.wholeAge === 75 && D.retireLater === 75 && D.neverCoast.age > 74 && D.neverCoast.age <= 75, J(D.neverCoast.age));
 
 // ---------- what-if grid ----------
 const G = CF.grid(H0);

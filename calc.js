@@ -46,6 +46,9 @@
     houseOn: 0, buyAge: 45, price: 418000, downPct: 10, downFrom: 1, mortRate: 7.4, term: 30,
     pmi: 0.6, closePct: 3, sellPct: 6, propTax: 0.9, insure: 1600, maint: 1, apprec: 0.5,
     rent: 1530, rentGrowth: 0,
+    // Suggestions (SPEC 12): the goal (0 picked from the plan, 1 retire by R, 2 coast by X,
+    // 3 as early as possible), its age (X, or the target FI age T), and taxable saving.
+    goal: 0, goalAge: 55, taxSave: 0,
   });
 
   // min/max: what a typed value is clamped to. sMin/sMax: the slider's range.
@@ -98,6 +101,9 @@
     apprec:    { min: -10, max: 10,   sMin: -2, sMax: 3,       step: 0.1 },
     rent:      { min: 0,   max: 1e6,  sMin: 0,  sMax: 5000,    step: 10,   curve: true, money: true },
     rentGrowth:{ min: -10, max: 10,   sMin: -2, sMax: 3,       step: 0.1 },
+    goal:      { choice: [0, 1, 2, 3] },                                    // anything else cleans to 0
+    goalAge:   { min: 0,   max: 120,  sMin: 18, sMax: 85,      step: 1,    int: true },
+    taxSave:   { min: 0,   max: 1e8,  sMin: 0,  sMax: 50000,   step: 100,  curve: true, money: true },
   });
   const KEYS = Object.keys(DEFAULTS);
 
@@ -111,6 +117,7 @@
     houseOn: "ho", buyAge: "hb", price: "hp", downPct: "hd", downFrom: "hf", mortRate: "hm", term: "ht",
     pmi: "hq", closePct: "hc", sellPct: "hs", propTax: "hx", insure: "hi", maint: "hn", apprec: "hg",
     rent: "hr", rentGrowth: "hw",
+    goal: "go", goalAge: "gx", taxSave: "o",
   });
 
   // ---------- building blocks ----------
@@ -151,7 +158,7 @@
     const fb = fallback === undefined ? DEFAULTS[key] : fallback;
     if (!Number.isFinite(n)) return { value: fb, ok: false };
     if (f.bool) return { value: n ? 1 : 0, ok: true };
-    if (f.choice) return { value: n === f.choice[0] ? f.choice[0] : f.choice[f.choice.length - 1], ok: true };
+    if (f.choice) return { value: f.choice.includes(n) ? n : fb, ok: true };
     let v = Math.min(f.max, Math.max(f.min, n));
     if (f.int) v = Math.round(v);
     return { value: v, ok: true };
@@ -219,12 +226,14 @@
    * split evenly and follows each partner's own plan.
    */
   function contribAt(v, plan, age) {
-    const out = { k401: 0, employer: 0, roth: 0, hsa: 0, byPartner: {} };
+    const out = { k401: 0, employer: 0, roth: 0, hsa: 0, taxable: 0, byPartner: {} };
     const ps = partners(v);
     for (const p of ps) {
       const b = partnerBase(v, p), f = factorAt(plan[p], age);
       out.k401 += b.k401 * f; out.employer += b.employer * f; out.roth += b.roth * f;
       out.byPartner[p] = b.total * f;
+      // Other investing (taxable): split evenly, each half follows its partner (like a self-only HSA).
+      out.taxable += (v.taxSave || 0) / ps.length * f;
     }
     if (v.hsaFamily) {
       const allCoasting = ps.every((p) => plan[p].on && age >= plan[p].age);
@@ -239,7 +248,7 @@
     } else {
       for (const p of ps) out.hsa += v.hsa / ps.length * factorAt(plan[p], age);
     }
-    out.total = out.k401 + out.employer + out.roth + out.hsa;
+    out.total = out.k401 + out.employer + out.roth + out.hsa + out.taxable;
     return out;
   }
 
@@ -676,6 +685,24 @@
     return { age: null, wholeAge: null };
   }
 
+  /**
+   * FI age buying: never coast, full saving, working past R if needed, against FIRE_own. The
+   * household must be FI and stay FI through the purchase: a renter's FI before b doesn't count if
+   * closing then drops the portfolio below FIRE_own, so the search restarts at the last point up
+   * to b (the balance after closing at b) that is below target. -> {age, wholeAge, points, top}
+   */
+  function fiBuy(v, T, r) {
+    const top = Math.max(v.age, v.retAge, NEVER_COAST_MAX_AGE);
+    const points = buyPath(v, fullPlanOf(v), r, T, top, true).points;
+    let restart = 0;
+    points.forEach((p, i) => {
+      const t = T.fireOwn(p.age), bal = p.post !== undefined ? p.post : p.balance;
+      if (p.age <= T.b && bal - t < -1e-9 * Math.max(1, Math.abs(t))) restart = i;
+    });
+    const f = firstReach(points.slice(restart), T.fireOwn);
+    return { age: f.age, wholeAge: f.wholeAge, points, top };
+  }
+
   /** Net worth at R on each side, everything else as entered. */
   function netWorths(v, res, T) {
     const R = v.retAge;
@@ -736,18 +763,9 @@
     const fireRent = T.fireRent(R), fireOwn = T.fireOwn(R);
 
     // FI age: never coast, full saving, working past R if needed; each against its own FIRE number.
-    const top = Math.max(v.age, v.retAge, NEVER_COAST_MAX_AGE);
     const fiRent = firstReach(res.neverCoast.points, T.fireRent);
-    // Buying: the first age the household is FI and stays FI through the purchase. A renter's FI
-    // before b doesn't count if closing then drops the portfolio below FIRE_own, so the search
-    // restarts at the last point up to b (the balance after closing at b) that is below target.
-    const fullBuy = buyPath(v, fullPlanOf(v), r, T, top, true).points;
-    let restart = 0;
-    fullBuy.forEach((p, i) => {
-      const t = T.fireOwn(p.age), bal = p.post !== undefined ? p.post : p.balance;
-      if (p.age <= b && bal - t < -1e-9 * Math.max(1, Math.abs(t))) restart = i;
-    });
-    const fiBuy = firstReach(fullBuy.slice(restart), T.fireOwn);
+    const fb = fiBuy(v, T, r);
+    const fiBuyAge = { age: fb.age, wholeAge: fb.wholeAge };
 
     // Meets the coast line. Buying: the balance at k that, with no base saving from k (housing
     // deltas and the purchase only, no draw), grows into FIRE_own by R. It is affine in the
@@ -814,7 +832,7 @@
       },
       pmiEnds,
       fire: { rent: fireRent, own: fireOwn, mortLeft: T.mortLeft(R) },
-      fi: { rent: fiRent, buy: fiBuy }, cross: { rent: crossRent, buy: crossBuy }, earliest,
+      fi: { rent: fiRent, buy: fiBuyAge }, cross: { rent: crossRent, buy: crossBuy }, earliest,
       atRet: {
         rentPortfolio: res.balanceAtRet, buyPortfolio: nw.buyPortfolio, rentNW: nw.rent, buyNW: nw.buy,
         value: nw.value, loanLeft: nw.loanLeft, homeNet: nw.homeNet, credited: nw.credited, shortDebt: nw.shortDebt,
@@ -822,6 +840,650 @@
       breakeven: { growth, rate },
       yearsCostMore, yearsShort, totalDeficit, cashShort: short > 0.5 ? short : 0, afford, points, warnings,
     };
+  }
+
+  // ---------- suggestions: ways to reach a goal (SPEC 12) ----------
+  // For a goal (retire by R, coast by X, or FI by a target age T), each lever is solved for the
+  // smallest change that meets it, on the same projections as everything else. Educational
+  // estimates from this model, not advice: every account earns the same return and no taxes.
+
+  const YEAR_EFFORT = 0.04;    // one more year (working, buying later) counts like 4% of pay
+  const COMBO_TAU = 0.15;      // above this effort for the best single step, try two smaller ones
+  // Plausible range (SPEC 12.2): beyond these a lever goes to "Not on its own", never a card.
+  const RET_MAX = 80;          // retiring later than this isn't offered
+  const SPEND_FLOOR = 10000;   // retirement spending below max($10K, 25% of the plan) isn't offered
+  const CUT_FLOOR = 0.25;      // nor a home below 25% of the price
+  const LEVER_ORDER = Object.freeze(["save", "coastBoth", "coastA", "coastB", "spend", "drawLess", "retLater",
+    "price", "buyLater", "down", "noBuy"]);
+  const SIZE_STEPS = Object.freeze([[0.05, "small"], [0.15, "medium"], [0.30, "big"], [Infinity, "veryBig"]]);
+  function sizeOf(e) { for (const [lim, name] of SIZE_STEPS) if (e <= lim) return name; return "veryBig"; }
+
+  /**
+   * The goal the suggestions aim at. goal 0 picks from the plan: "coast by X" when every partner's
+   * coast switch is on at the same age X before R, otherwise "retire by R" (the plan as entered,
+   * coast switches included). Coasting at R is the same as retiring (coerced "xIsR").
+   */
+  function goalOf(v) {
+    const R = v.retAge, ps = partners(v);
+    const out = { type: "retire", X: null, T: null, inferred: v.goal === 0 };
+    if (v.goal === 0) {
+      const ages = ps.filter((p) => v["coastOn" + p]).map((p) => Math.max(v["coastAge" + p], v.age));
+      if (ages.length === ps.length && ages.every((a) => a === ages[0]) && ages[0] < R) { out.type = "coast"; out.X = ages[0]; }
+    } else if (v.goal === 2) {
+      const X = Math.min(R, Math.max(v.age, v.goalAge));
+      if (X >= R) out.coerced = "xIsR"; else { out.type = "coast"; out.X = X; }
+    } else if (v.goal === 3) {
+      out.type = "early"; out.T = Math.max(v.age, v.goalAge);
+    }
+    return out;
+  }
+
+  /** The coast plan a goal judges: as entered (retire), or everyone coasting at X (`ages` overrides one). */
+  function goalPlan(v, G) {
+    if (G.type !== "coast") return planOf(v);
+    const o = {};
+    for (const p of partners(v)) o[p] = { on: true, age: G.ages && G.ages[p] !== undefined ? G.ages[p] : G.X };
+    return planOf(v, o);
+  }
+
+  /** Whether the home comparison runs for these inputs (house() would apply). */
+  function houseApplies(v) { return !!v.houseOn && v.retAge > v.age && v.buyAge < v.retAge && v.price > 0; }
+
+  /**
+   * Where a plan stands against a goal. ctx.scenario "buy" judges the buying path against
+   * FIRE_own(R) (homeTerms rebuilt from v, so price, down payment and buy age can change).
+   * -> {metric, have, need, margin, fiAge?, fiFrac?}; margin in $ (retire, coast) or whole years (early).
+   */
+  function measure(v, G, ctx) {
+    const r = realReturn(v.nominal / 100, v.inflation / 100);
+    const buy = !!ctx && ctx.scenario === "buy";
+    const T = buy ? homeTerms(v, r) : null;
+    const fire = fireNumber(v.spend, v.swr / 100);
+    if (G.type === "early") {
+      const f = buy ? fiBuy(v, T, r) : neverCoastAge(v, fire, r);
+      const p = f.points[Math.min(Math.max(0, G.T - v.age), f.points.length - 1)];
+      return {
+        metric: "fiAge", fiAge: f.wholeAge, fiFrac: f.age,
+        have: p.post !== undefined ? p.post : p.balance, need: buy ? T.fireOwn(p.age) : fire,
+        margin: f.wholeAge === null ? -Infinity : G.T - f.wholeAge,
+      };
+    }
+    const plan = goalPlan(v, G);
+    let have, need;
+    if (!buy) { have = balanceAtRet(v, plan, r); need = fire; }
+    else {
+      // Cash short at closing is carried as a debt grown at r to R (as house().atRet.shortDebt),
+      // so a down payment the household doesn't have is never free.
+      const run = buyPath(v, plan, r, T, v.retAge), pts = run.points;
+      const shortDebt = run.short > 0.5 ? run.short * Math.pow(1 + r, v.retAge - T.b) : 0;
+      have = pts[pts.length - 1].balance - shortDebt; need = T.fireOwn(v.retAge);
+      if (shortDebt) return { metric: "balance", have, need, margin: have - need, cashShort: run.short, shortDebt };
+    }
+    return { metric: "balance", have, need, margin: have - need };
+  }
+  /** >= -tol means the goal is met (tol = 1e-6 x the target for $, 0 for whole years). */
+  function margin(v, G, ctx) { return measure(v, G, ctx).margin; }
+
+  /**
+   * Monotone search on multiples of `step`. dir "up" (default): the smallest x >= lo with test(x)
+   * true (false below, true above); `hi` is the first guess, doubled up to `cap`. dir "down": the
+   * largest x in [lo, hi] with test(x) true (true below, false above). null when there is none.
+   * At most 60 halvings; the answer is exact on the step grid, so x - step (up) or x + step (down) fails.
+   */
+  function bisect(test, lo, hi, o) {
+    o = o || {};
+    const step = o.step || 1, at = (k) => +(k * step).toFixed(6);
+    if (o.dir === "down") {
+      let a = Math.ceil(lo / step - 1e-9), b = Math.floor(hi / step + 1e-9);
+      if (b < a) return null;
+      if (test(at(b))) return at(b);
+      if (!test(at(a))) return null;
+      for (let i = 0; i < 60 && b - a > 1; i++) { const m = Math.floor((a + b) / 2); if (test(at(m))) a = m; else b = m; }
+      return at(a);
+    }
+    const cap = o.cap === undefined ? hi : o.cap, kCap = Math.floor(cap / step + 1e-9);
+    let a = Math.ceil(lo / step - 1e-9);
+    if (a > kCap) return null;
+    if (test(at(a))) return at(a);
+    let b = Math.min(kCap, Math.max(a + 1, Math.ceil(hi / step - 1e-9)));
+    for (let i = 0; i < 60 && !test(at(b)); i++) {
+      if (b >= kCap) return null;
+      const span = b - a; a = b; b = Math.min(kCap, b + 2 * span);
+    }
+    for (let i = 0; i < 60 && b - a > 1; i++) { const m = Math.floor((a + b) / 2); if (test(at(m))) b = m; else a = m; }
+    return at(b);
+  }
+
+  /**
+   * Whole ages from `from` toward `to` (either direction). dir "first" (default): the first age
+   * that passes; "last": the last of an unbroken run of passes starting at `from`. null if none.
+   */
+  function scanAge(test, from, to, dir) {
+    const d = to >= from ? 1 : -1;
+    let last = null;
+    for (let a = from; d > 0 ? a <= to : a >= to; a += d) {
+      const ok = test(a);
+      if (dir === "last") { if (!ok) break; last = a; } else if (ok) return a;
+    }
+    return dir === "last" ? last : null;
+  }
+
+  // Splits `amt` between two accounts: B gets half rounded down to $50, A the rest; overflow moves.
+  function split2(amt, roomA, roomB) {
+    let b = Math.floor(amt / 2 / 50) * 50, a = amt - b;
+    if (a > roomA) { b += a - roomA; a = roomA; }
+    if (b > roomB) { a += b - roomB; b = roomB; }
+    return [a, b];
+  }
+  function spread(amt, rooms) { return rooms.length === 1 ? [Math.min(amt, rooms[0])] : split2(amt, rooms[0], rooms[1]); }
+
+  // Fills accounts tier by tier; shared by allocate (add) and unallocate (take back).
+  function fill(v, delta, tiers, sign) {
+    const set = {}, steps = [];
+    let left = Math.max(0, delta);
+    for (const t of tiers) {
+      const items = t.items();
+      const rooms = items.map((it) => Math.max(0, it.room));
+      const amt = Math.min(left, rooms.reduce((s, x) => s + x, 0));
+      if (!(amt > 0)) continue;
+      spread(amt, rooms).forEach((g, i) => {
+        if (!(g > 0)) return;
+        const it = items[i], from = v[it.key], to = from + sign * g;
+        set[it.key] = to;
+        if (t.spend) t.spend(it.who, g);
+        steps.push({ key: it.key, who: it.who, from, to, tier: t.n, atLimit: it.limit !== undefined && to >= it.limit - 1e-9 });
+      });
+      left -= amt;
+    }
+    return { set, steps, left };
+  }
+
+  /**
+   * Adds `delta` $/yr across accounts in a common, general order (SPEC 12.4): the HSA to its limit
+   * (only if one is in use), Roth IRAs to the limit, 401(k)s to the limit (only with a plan), then
+   * taxable. Each partner's tax-advantaged room is also capped by what is left of their own salary.
+   * Employer money is never changed. -> {set, steps:[{key, who, from, to, tier, atLimit}], left}
+   */
+  function allocate(v, delta) {
+    const ps = partners(v), head = {};
+    for (const p of ps) head[p] = Math.max(0, v["sal" + p] - partnerBase(v, p).total);
+    const paid = ps.filter((p) => v["sal" + p] > 0);
+    const use = (who, g) => { head[who] -= g; };
+    const lim = hsaLimit(v);
+    return fill(v, delta, [
+      { n: 1, items: () => (v.hsa > 0 ? [{ key: "hsa", who: "household", room: lim - v.hsa, limit: lim }] : []) },
+      { n: 2, spend: use, items: () => paid.map((p) => ({ key: "roth" + p, who: p, room: Math.min(LIMITS.roth - v["roth" + p], head[p]), limit: LIMITS.roth })) },
+      { n: 3, spend: use, items: () => paid.filter((p) => v["k" + p] > 0 || v["emp" + p] > 0)
+        .map((p) => ({ key: "k" + p, who: p, room: Math.min(LIMITS.k401 - v["k" + p], head[p]), limit: LIMITS.k401 })) },
+      { n: 4, items: () => [{ key: "taxSave", who: "household", room: FIELDS.taxSave.max - v.taxSave }] },
+    ], 1);
+  }
+
+  /** Takes `delta` $/yr back out, in reverse: taxable, 401(k)s, Roth IRAs, then the HSA. Never employer money. */
+  function unallocate(v, delta) {
+    const ps = partners(v);
+    return fill(v, delta, [
+      { n: 4, items: () => [{ key: "taxSave", who: "household", room: v.taxSave }] },
+      { n: 3, items: () => ps.filter((p) => v["k" + p] > 0).map((p) => ({ key: "k" + p, who: p, room: v["k" + p] })) },
+      { n: 2, items: () => ps.filter((p) => v["roth" + p] > 0).map((p) => ({ key: "roth" + p, who: p, room: v["roth" + p] })) },
+      { n: 1, items: () => (v.hsa > 0 ? [{ key: "hsa", who: "household", room: v.hsa }] : []) },
+    ], -1);
+  }
+  function removable(v) {
+    let s = v.taxSave + v.hsa;
+    for (const p of partners(v)) s += v["k" + p] + v["roth" + p];
+    return s;
+  }
+
+  /**
+   * The suggestion engine (SPEC 12.6): where the plan stands against its goal, then the smallest
+   * change to each lever that meets it (short) or the room to spare (met), ranked.
+   */
+  function suggest(inputs) {
+    const v = sanitize(inputs).values;
+    const G = goalOf(v), R = v.retAge, ps = partners(v);
+    const out = {
+      goal: G, scenario: "rent", status: "short", margin: 0, progress: null, list: [], rejected: [],
+      sensitivity: null, best: null, inputs: v, fi: null,
+    };
+    if (R <= v.age) { out.status = "badAges"; return out; }
+    const buy = houseApplies(v);
+    const ctx = { scenario: buy ? "buy" : "rent" };
+    out.scenario = ctx.scenario;
+    if (buy) out.buyAge = Math.max(v.buyAge, v.age);
+    const pay = ps.reduce((s, p) => s + v["sal" + p], 0);
+    const yrs = R - v.age;
+    const early = G.type === "early";
+
+    // Where things stand now.
+    const r0 = realReturn(v.nominal / 100, v.inflation / 100);
+    const fiNow = buy ? fiBuy(v, homeTerms(v, r0), r0) : neverCoastAge(v, fireNumber(v.spend, v.swr / 100), r0);
+    out.fi = { age: fiNow.age, wholeAge: fiNow.wholeAge, top: fiNow.top };
+    const m0 = measure(v, G, ctx);
+    const tol = early ? 0 : 1e-6 * Math.max(1, m0.need);
+    const ok = (m) => m >= -tol;
+    const meets = (vv, GG) => ok(margin(vv, GG || G, ctx));
+    out.margin = m0.margin;
+    out.progress = {
+      have: m0.have, need: m0.need, pct: m0.need > 0 ? m0.have / m0.need : 1, metric: m0.metric,
+      ...(early ? { fiAge: m0.fiAge, fiFrac: m0.fiFrac } : {}),
+    };
+    if (fiNow.wholeAge === v.age) { out.status = "fiNow"; return out; }
+    const met = ok(m0.margin);
+    out.status = met ? "met" : "short";
+
+    // ----- shared pieces -----
+    const curTotal = contribAt(v, fullPlanOf(v), v.age).total;
+    const payOf = (vv) => partners(vv).reduce((s, p) => s + vv["sal" + p], 0);
+    // The coast keys that make the plan as entered match a coast goal (not counted as parts).
+    const coastKeys = (GG) => {
+      if (GG.type !== "coast") return {};
+      const s = {};
+      for (const p of ps) { s["coastOn" + p] = 1; s["coastAge" + p] = GG.ages && GG.ages[p] !== undefined ? GG.ages[p] : GG.X; }
+      return s;
+    };
+    // A partner's yearly saving that stops while they coast (their accounts, half the HSA and taxable).
+    const lost = (vv, p) => (partnerBase(vv, p).total + vv.taxSave / ps.length + vv.hsa / ps.length) * (1 - vv["after" + p] / 100);
+    function effectOf(vv, GG) {
+      const m = measure(vv, GG, ctx);
+      if (m.metric === "fiAge") {
+        return { metric: "fiAge", before: m0.fiFrac, after: m.fiFrac, target: GG.T, fiAge: m.fiAge,
+          yearsSooner: m0.fiFrac !== null && m.fiFrac !== null ? m0.fiFrac - m.fiFrac : null };
+      }
+      return { metric: "balance", before: m0.have, after: m.have, target: m.need };
+    }
+    // Under a coast goal every Apply patch also turns both coast switches on at X (SPEC 12.2), so
+    // the page then judges the same plan the card was solved for. The lever's own keys win.
+    const make = (vv, GG, o) => {
+      const G2 = o.G2 || GG;
+      const set = o.set && G2.type === "coast" ? { ...coastKeys(G2), ...o.set } : o.set;
+      const s = {
+        id: o.id, kind: o.kind || "fix", change: o.change, set, steps: o.steps || [],
+        effect: effectOf(sanitize({ ...vv, ...set }).values, G2),
+        effort: o.effort === undefined ? 0 : o.effort, parts: o.parts === undefined ? 1 : o.parts,
+        feasible: o.feasible !== false, flags: o.flags || [], goal2: G2,
+      };
+      if (o.who) s.who = o.who;
+      if (o.reason) s.reason = o.reason;
+      if (o.benefit !== undefined) s.benefit = o.benefit;
+      s.size = s.kind === "opportunity" ? null : sizeOf(s.effort);
+      return s;
+    };
+    // The labels on a save-more change of d $/yr (the solo save card and a combo's partial save).
+    function saveFlags(vv, steps, d) {
+      const flags = [], pay2 = Math.max(1, payOf(vv));
+      for (const st of steps) if (st.atLimit) flags.push({ code: "atLimit", key: st.key });
+      if (steps.some((st) => st.tier === 1)) flags.push({ code: "hsaEligibility" });
+      if (steps.some((st) => st.tier === 2)) flags.push({ code: "rothIncome" });
+      flags.push({ code: "matchNote" });
+      if (vv.age >= 50) flags.push({ code: "catchUp" });
+      const share = (contribAt(vv, fullPlanOf(vv), vv.age).total + d) / pay2;
+      if (share >= 0.35) flags.push({ code: "highShare", pct: share });
+      if (share > 1 + 1e-9) flags.push({ code: "overPay" });
+      return flags;
+    }
+    const bad = (id, reason, extra) => ({ id, kind: "fix", feasible: false, reason, flags: [], effort: Infinity, parts: 1,
+      change: null, set: null, steps: [], effect: null, size: null, ...(extra || {}) });
+
+    const spendFloor = (S) => Math.max(SPEND_FLOOR, CUT_FLOOR * S);
+    // Cash short at closing on the buying path the goal judges (0 when the portfolio covers it).
+    const cashShortAt = (vv, GG) => buyPath(vv, goalPlan(vv, GG), realReturn(vv.nominal / 100, vv.inflation / 100),
+      homeTerms(vv, realReturn(vv.nominal / 100, vv.inflation / 100)), vv.retAge).short;
+
+    // ----- levers (each works on any v / G, so the combo can reuse them) -----
+    const L = {};
+
+    L.save = (vv, GG) => {
+      if ((GG.type === "coast" && GG.X <= vv.age) || (GG.type === "early" && GG.T <= vv.age)) return bad("save", "noYearsLeft");
+      const pay2 = payOf(vv);
+      if (!(pay2 > 0)) return bad("save", "noPay");
+      const total = contribAt(vv, fullPlanOf(vv), vv.age).total;
+      const test = (d) => meets({ ...vv, ...allocate(vv, d).set }, GG);
+      // Closed-form first guess when it applies: retire, renting, nobody coasting.
+      let guess = Math.max(1e4, pay2);
+      if (GG.type === "retire" && !buy && !Number.isFinite(firstCoastAge(planOf(vv)))) {
+        const n2 = vv.retAge - vv.age, rr = realReturn(vv.nominal / 100, vv.inflation / 100);
+        const need = (fireNumber(vv.spend, vv.swr / 100) - vv.assets * Math.pow(1 + rr, n2)) / annuityFactor(rr, n2) - total;
+        if (need > 0) guess = need;
+      }
+      const d = bisect(test, 100, guess, { step: 100, cap: Math.min(FIELDS.taxSave.max, 10 * Math.max(pay2, 1e4)) });
+      if (d === null) return bad("save", "exceedsPay");
+      const a = allocate(vv, d), flags = saveFlags(vv, a.steps, d);
+      const over = flags.some((f) => f.code === "overPay");
+      return make(vv, GG, {
+        id: "save", change: { key: "save", from: total, to: total + d, delta: d, unit: "$/yr" },
+        set: { ...a.set, ...coastKeys(GG) }, steps: a.steps, effort: d / pay2, parts: a.steps.length, flags,
+        feasible: !over, reason: over ? "exceedsPay" : undefined,
+      });
+    };
+
+    L.spend = (vv, GG) => {
+      const S = vv.spend, test = (x) => meets({ ...vv, spend: x }, GG);
+      const s = bisect(test, 0, Math.ceil(S / 100) * 100 - 100, { step: 100, dir: "down" });
+      if (s === null || s >= S) return bad("spend", "belowZero");
+      const cut = (S - s) / S;
+      // Retiring on almost nothing "meets" any goal; below the floor it isn't offered (SPEC 12.2).
+      const low = s < spendFloor(S);
+      return make(vv, GG, { id: "spend", change: { key: "spend", from: S, to: s, delta: s - S, unit: "$/yr" },
+        set: { spend: s }, effort: cut, flags: cut >= 0.25 ? [{ code: "bigCut", pct: cut }] : [],
+        feasible: !low, reason: low ? "belowFloor" : undefined });
+    };
+
+    L.retLater = (vv, GG) => {
+      if (GG.type === "early") return null;
+      const top = NEVER_COAST_MAX_AGE, R0 = vv.retAge;
+      const a = R0 >= top ? null : scanAge((x) => meets({ ...vv, retAge: x }, GG), R0 + 1, top);
+      if (a === null) return bad("retLater", "notByTop");
+      const late = a > RET_MAX;
+      return make(vv, GG, { id: "retLater", change: { key: "retAge", from: R0, to: a, delta: a - R0, unit: "age" },
+        set: { retAge: a }, effort: (a - R0) * YEAR_EFFORT, flags: a < 59.5 ? [{ code: "bridge" }] : [],
+        feasible: !late, reason: late ? "tooLate" : undefined });
+    };
+
+    // Coasting later: everyone (coastBoth) or one partner. Under the coast goal both start at X;
+    // under the retire goal only partners whose switch is on, each from their own age.
+    function coastLever(vv, GG, who) {
+      const ps2 = partners(vv), R0 = vv.retAge;
+      const pay2 = Math.max(1, payOf(vv)), yrs2 = Math.max(1, R0 - vv.age);
+      const movers = who === "both" ? ps2 : [who];
+      const id = who === "both" ? "coastBoth" : "coast" + who;
+      if (GG.type === "coast") {
+        const from = who === "both" ? GG.X : GG.ages && GG.ages[who] !== undefined ? GG.ages[who] : GG.X;
+        const G2 = (x) => (who === "both" ? { ...GG, X: x, ages: undefined } : { ...GG, ages: { ...(GG.ages || {}), [who]: x } });
+        // Both coasting at R is just retiring, so everyone together stops by R - 1; one partner may save to R.
+        const a = scanAge((x) => meets(vv, G2(x)), from + 1, who === "both" ? R0 - 1 : R0);
+        if (a === null) return bad(id, "notByRet", { who });
+        const gg = G2(a), set = coastKeys(gg);
+        // Both later: the goal moves with them. One later: the plan as entered is judged from now on.
+        if (vv.goal === 2) { if (who === "both") set.goalAge = a; else set.goal = 1; }
+        const eff = movers.reduce((s, p) => s + (a - from) * lost(vv, p), 0) / (yrs2 * pay2);
+        return make(vv, GG, { id, who, change: { key: "coastAge" + (who === "both" ? "" : who), from, to: a, delta: a - from, unit: "age" },
+          set, effort: eff, G2: gg });
+      }
+      if (GG.type !== "retire") return null;
+      if (!movers.every((p) => vv["coastOn" + p] && vv["coastAge" + p] < R0)) return null;
+      const cur = {};
+      for (const p of movers) cur[p] = Math.max(vv.age, vv["coastAge" + p]);
+      const from = Math.min(...movers.map((p) => cur[p]));
+      const patch = (x) => { const s = {}; for (const p of movers) s["coastAge" + p] = Math.max(cur[p], x); return s; };
+      const a = scanAge((x) => meets({ ...vv, ...patch(x) }, GG), from + 1, R0);
+      if (a === null) return bad(id, "notByRet", { who });
+      const eff = movers.reduce((s, p) => s + (Math.max(cur[p], a) - cur[p]) * lost(vv, p), 0) / (yrs2 * pay2);
+      return make(vv, GG, { id, who, change: { key: "coastAge" + (who === "both" ? "" : who), from, to: a, delta: a - from, unit: "age" },
+        set: patch(a), effort: eff });
+    }
+    L.coastBoth = (vv, GG) => coastLever(vv, GG, "both");
+    L.coastA = (vv, GG) => (vv.two ? coastLever(vv, GG, "A") : null);
+    L.coastB = (vv, GG) => (vv.two ? coastLever(vv, GG, "B") : null);
+
+    L.drawLess = (vv, GG) => {
+      if (GG.type === "early" || !(vv.draw > 0)) return null;
+      const first = firstCoastAge(goalPlan(vv, GG));
+      if (!(first < vv.retAge)) return null;
+      const D = vv.draw, test = (x) => meets({ ...vv, draw: x }, GG);
+      const d = bisect(test, 0, Math.ceil(D / 500) * 500 - 500, { step: 500, dir: "down" });
+      if (d === null || d >= D) return bad("drawLess", "belowZero");
+      const cy = vv.retAge - Math.max(first, vv.age);
+      return make(vv, GG, { id: "drawLess", change: { key: "draw", from: D, to: d, delta: d - D, unit: "$/yr" },
+        set: { draw: d }, effort: (D - d) * cy / (Math.max(1, vv.retAge - vv.age) * Math.max(1, payOf(vv))) });
+    };
+
+    L.buyLater = (vv, GG) => {
+      if (!buy) return null;
+      const b = Math.max(vv.buyAge, vv.age);
+      const a = scanAge((x) => meets({ ...vv, buyAge: x }, GG), b + 1, vv.retAge - 1);
+      if (a === null) return bad("buyLater", "noEffect");
+      return make(vv, GG, { id: "buyLater", change: { key: "buyAge", from: b, to: a, delta: a - b, unit: "age" },
+        set: { buyAge: a }, effort: (a - b) * YEAR_EFFORT * 0.5 });
+    };
+    L.price = (vv, GG) => {
+      if (!buy) return null;
+      const P = vv.price, test = (x) => meets({ ...vv, price: x }, GG);
+      const p = bisect(test, 1000, Math.ceil(P / 1000) * 1000 - 1000, { step: 1000, dir: "down" });
+      if (p === null || p >= P) return bad("price", "noEffect");
+      const low = p < CUT_FLOOR * P;
+      return make(vv, GG, { id: "price", change: { key: "price", from: P, to: p, delta: p - P, unit: "$" },
+        set: { price: p }, effort: (P - p) / P, feasible: !low, reason: low ? "belowFloor" : undefined });
+    };
+    L.down = (vv, GG) => {
+      if (!buy) return null;
+      const d0 = vv.downPct;
+      const a = scanAge((x) => meets({ ...vv, downPct: x }, GG), Math.floor(d0) + 1, 100);
+      if (a === null) return bad("down", "noEffect");
+      // Paid from invested assets: a down payment the portfolio doesn't hold at b isn't offered
+      // (measure already carries any shortfall as a debt, this keeps it off the cards too).
+      const vv2 = sanitize({ ...vv, downPct: a }).values;
+      const short = vv2.downFrom ? cashShortAt(vv2, GG) : 0;
+      // Effort: the extra cash spread over the years to R, like a year's extra saving.
+      const extra = vv.price * (a - d0) / 100;
+      const card = make(vv, GG, { id: "down", change: { key: "downPct", from: d0, to: a, delta: a - d0, unit: "%" },
+        set: { downPct: a }, effort: extra / (Math.max(1, vv.retAge - vv.age) * Math.max(1, payOf(vv))),
+        feasible: !(short > 0.5), reason: short > 0.5 ? "cashShort" : undefined });
+      if (short > 0.5) card.cashShort = short;
+      return card;
+    };
+    // Renting instead: the renting plan's margin, for comparison (a fixed switch, not solved).
+    L.noBuy = (vv, GG) => {
+      if (!buy) return null;
+      const m = measure({ ...vv, houseOn: 0 }, GG, { scenario: "rent" });
+      const s = {
+        id: "noBuy", kind: "fix", change: { key: "houseOn", from: 1, to: 0, delta: -1, unit: "" }, set: { ...coastKeys(GG), houseOn: 0 }, steps: [],
+        effect: m.metric === "fiAge" ? { metric: "fiAge", before: m0.fiFrac, after: m.fiFrac, target: GG.T, fiAge: m.fiAge }
+          : { metric: "balance", before: m0.have, after: m.have, target: m.need },
+        effort: 0.5, parts: 1, feasible: ok(m.margin), flags: [], rentMargin: m.margin, size: sizeOf(0.5), goal2: GG,
+      };
+      if (!s.feasible) s.reason = "rentShort";
+      return s;
+    };
+
+    // ----- opportunities (on track): the largest change that still meets the goal -----
+    function opportunities() {
+      const list = [];
+      const add = (o) => list.push(make(v, G, { kind: "opportunity", ...o }));
+      const retireG = { type: "retire", X: null, T: null, inferred: false };
+      if (!early) {
+        // Coast sooner: everyone, and the better single partner.
+        const cands = [];
+        if (G.type === "coast") {
+          const both = scanAge((x) => meets(v, { ...G, X: x }), G.X - 1, v.age, "last");
+          if (both !== null) {
+            const set = coastKeys({ ...G, X: both });
+            if (v.goal === 2) set.goalAge = both;
+            cands.push({ id: "coastSooner", who: "both", change: { key: "coastAge", from: G.X, to: both, delta: both - G.X, unit: "age" },
+              set, benefit: (G.X - both) * YEAR_EFFORT, G2: { ...G, X: both } });
+          }
+          if (v.two) for (const p of ps) {
+            const a = scanAge((x) => meets(v, { ...G, ages: { [p]: x } }), G.X - 1, v.age, "last");
+            if (a === null) continue;
+            const set = coastKeys({ ...G, ages: { [p]: a } });
+            if (v.goal === 2) set.goal = 1;
+            cands.push({ id: "coastSooner", who: p, change: { key: "coastAge" + p, from: G.X, to: a, delta: a - G.X, unit: "age" },
+              set, benefit: (G.X - a) * YEAR_EFFORT * 0.5, G2: retireG });
+          }
+        } else {
+          const cur = {};
+          for (const p of ps) cur[p] = v["coastOn" + p] && v["coastAge" + p] < R ? Math.max(v.age, v["coastAge" + p]) : R;
+          const lo = Math.min(...ps.map((p) => cur[p]));
+          const bothSet = (x) => { const s = {}; for (const p of ps) { s["coastOn" + p] = 1; s["coastAge" + p] = x; } return s; };
+          const both = lo > v.age ? scanAge((x) => meets({ ...v, ...bothSet(x) }), v.age, lo - 1) : null;
+          if (both !== null) cands.push({ id: "coastSooner", who: "both", change: { key: "coastAge", from: lo, to: both, delta: both - lo, unit: "age" },
+            set: bothSet(both), benefit: (lo - both) * YEAR_EFFORT });
+          if (v.two) for (const p of ps) {
+            if (cur[p] <= v.age) continue;
+            const one = (x) => ({ ["coastOn" + p]: 1, ["coastAge" + p]: x });
+            const a = scanAge((x) => meets({ ...v, ...one(x) }), v.age, cur[p] - 1);
+            if (a !== null) cands.push({ id: "coastSooner", who: p, change: { key: "coastAge" + p, from: cur[p], to: a, delta: a - cur[p], unit: "age" },
+              set: one(a), benefit: (cur[p] - a) * YEAR_EFFORT * 0.5 });
+          }
+        }
+        const bothC = cands.find((c) => c.who === "both");
+        const single = cands.filter((c) => c.who !== "both").sort((a, b) => b.benefit - a.benefit)[0];
+        if (bothC) add(bothC);
+        if (single) add(single);
+        // Retire sooner (after any coast age of the goal, and after buying).
+        const floor = Math.max(v.age + 1, G.type === "coast" ? G.X + 1 : 0, buy ? Math.max(v.buyAge, v.age) + 1 : 0);
+        const ra = R - 1 >= floor ? scanAge((x) => meets({ ...v, retAge: x }), R - 1, floor, "last") : null;
+        if (ra !== null) add({ id: "retireSooner", change: { key: "retAge", from: R, to: ra, delta: ra - R, unit: "age" },
+          set: { retAge: ra }, benefit: (R - ra) * YEAR_EFFORT, flags: ra < 59.5 ? [{ code: "bridge" }] : [] });
+        // Draw more while coasting.
+        const first = firstCoastAge(goalPlan(v, G));
+        if (first < R) {
+          const test = (x) => meets({ ...v, draw: x });
+          let hi = Math.max(1000, v.draw * 2);
+          while (hi < FIELDS.draw.max && test(hi)) hi = Math.min(FIELDS.draw.max, hi * 2);
+          const d = bisect(test, Math.ceil(v.draw / 500) * 500, hi, { step: 500, dir: "down" });
+          if (d !== null && d > v.draw) add({ id: "drawMore", change: { key: "draw", from: v.draw, to: d, delta: d - v.draw, unit: "$/yr" },
+            set: { draw: d }, benefit: (d - v.draw) * (R - Math.max(first, v.age)) / (yrs * Math.max(1, pay)) });
+        }
+      }
+      // Spend more.
+      {
+        const test = (x) => meets({ ...v, spend: x });
+        let hi = Math.max(1000, v.spend * 2);
+        while (hi < FIELDS.spend.max && test(hi)) hi = Math.min(FIELDS.spend.max, hi * 2);
+        const s = bisect(test, Math.ceil(v.spend / 100) * 100, hi, { step: 100, dir: "down" });
+        if (s !== null && s > v.spend) add({ id: "spendMore", change: { key: "spend", from: v.spend, to: s, delta: s - v.spend, unit: "$/yr" },
+          set: { spend: s }, benefit: (s - v.spend) / Math.max(1, v.spend) });
+      }
+      // Save less (reverse order: taxable first, employer money never).
+      {
+        const all = removable(v);
+        if (all > 0) {
+          const test = (x) => meets({ ...v, ...unallocate(v, x).set });
+          const d = test(all) ? all : bisect(test, 0, Math.floor(all / 100) * 100, { step: 100, dir: "down" });
+          if (d !== null && d > 0) {
+            const u = unallocate(v, d);
+            add({ id: "saveLess", change: { key: "save", from: curTotal, to: curTotal - d, delta: -d, unit: "$/yr" },
+              set: u.set, steps: u.steps, parts: u.steps.length, benefit: d / Math.max(1, pay) });
+          }
+        }
+      }
+      return list.sort((a, b) => b.benefit - a.benefit).slice(0, 6);
+    }
+
+    // ----- sensitivity (information only, never a suggestion) -----
+    function sensitivity() {
+      const o = { haveReturn: v.nominal, haveSwr: v.swr, needReturn: null, inRange: false, needSwr: null, swrInRange: false };
+      const f = (patch) => margin({ ...v, ...patch }, G, ctx);
+      const lo = FIELDS.nominal.min, hi = FIELDS.nominal.max, slo = FIELDS.swr.min, shi = FIELDS.swr.max;
+      if (early) {
+        const nr = bisect((x) => ok(f({ nominal: x })), lo, hi, { step: 0.01 });
+        if (nr !== null && nr > lo) { o.needReturn = nr; o.inRange = true; }
+        const ns = bisect((x) => ok(f({ swr: x })), slo, shi, { step: 0.01 });
+        if (ns !== null && ns > slo) { o.needSwr = ns; o.swrInRange = true; }
+      } else {
+        const solve = (key, a, b) => {
+          if (!(f({ [key]: a }) < 0 && f({ [key]: b }) >= 0)) return null;
+          for (let i = 0; i < 80 && b - a > 1e-9; i++) { const m = (a + b) / 2; if (f({ [key]: m }) >= 0) b = m; else a = m; }
+          return (a + b) / 2;
+        };
+        o.needReturn = solve("nominal", lo, hi);
+        o.inRange = o.needReturn !== null;
+        if (!buy) {
+          if (m0.have > 0) { o.needSwr = v.spend / m0.have * 100; o.swrInRange = o.needSwr >= slo && o.needSwr <= shi; }
+        } else {
+          o.needSwr = solve("swr", slo, shi);
+          o.swrInRange = o.needSwr !== null;
+        }
+      }
+      if (met) o.cushion = o.needReturn === null ? null : v.nominal - o.needReturn;
+      return o;
+    }
+    out.sensitivity = sensitivity();
+
+    if (met) {
+      out.list = opportunities();
+      out.best = out.list[0] || null;
+      return out;
+    }
+
+    // ----- short: solve every lever, rank, and maybe combine two -----
+    const solved = [];
+    for (const id of LEVER_ORDER) { const s = L[id](v, G); if (s) solved.push(s); }
+    const feasible = solved.filter((s) => s.feasible), rejected = solved.filter((s) => !s.feasible);
+    const key = (s) => [s.id === "noBuy" ? 1 : 0, s.effort, s.parts, LEVER_ORDER.indexOf(s.id)];
+    const byKey = (a, b) => { const ka = key(a), kb = key(b); for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i]; return 0; };
+    feasible.sort(byKey);
+    // Keep coastBoth and only the better of the single-partner coast levers.
+    const singles = feasible.filter((s) => s.id === "coastA" || s.id === "coastB");
+    let cards = feasible.filter((s) => s !== singles[1]).slice(0, 5);
+
+    // Combo: two smaller steps when no single one is small enough (or none works).
+    const bestEff = cards.length ? cards[0].effort : Infinity;
+    if (bestEff > COMBO_TAU) {
+      const pool = ["save", "spend", "retLater", "coastBoth"];
+      const solo = {};
+      // Levers past the plausible range (retiring after 80, spending below the floor) can still lend a smaller part.
+      for (const s of solved) if (pool.includes(s.id) && s.set && s.change) solo[s.id] = s;
+      const partial = (s, f) => {
+        const ch = s.change;
+        if (s.id === "save") {
+          const d = Math.round(f * ch.delta / 100) * 100;
+          if (d <= 0 || d >= ch.delta) return null;
+          const a = allocate(v, d), flags = saveFlags(v, a.steps, d);
+          if (flags.some((x) => x.code === "overPay")) return null;
+          return { set: { ...a.set, ...coastKeys(G) }, G2: G, effort: d / Math.max(1, pay), parts: a.steps.length,
+            change: { ...ch, to: ch.from + d, delta: d }, steps: a.steps, flags };
+        }
+        if (s.id === "spend") {
+          const c = Math.round(f * -ch.delta / 100) * 100;
+          if (c <= 0 || c >= -ch.delta || v.spend - c < spendFloor(v.spend)) return null;
+          return { set: { ...coastKeys(G), spend: v.spend - c }, G2: G, effort: c / v.spend, parts: 1, change: { ...ch, to: v.spend - c, delta: -c },
+            flags: c / v.spend >= 0.25 ? [{ code: "bigCut", pct: c / v.spend }] : [] };
+        }
+        const n = Math.round(f * ch.delta);
+        if (n <= 0 || n >= ch.delta) return null;
+        if (s.id === "retLater") {
+          if (R + n > RET_MAX) return null;
+          return { set: { ...coastKeys(G), retAge: R + n }, G2: G, effort: n * YEAR_EFFORT, parts: 1, change: { ...ch, to: R + n, delta: n },
+            flags: R + n < 59.5 ? [{ code: "bridge" }] : [] };
+        }
+        if (s.id === "coastBoth" && G.type === "coast") {
+          const G2 = { ...G, X: G.X + n }, set = coastKeys(G2);
+          if (v.goal === 2) set.goalAge = G.X + n;
+          const eff = ps.reduce((t, p) => t + n * lost(v, p), 0) / (yrs * Math.max(1, pay));
+          return { set, G2, effort: eff, parts: 1, change: { ...ch, to: G.X + n, delta: n }, flags: [] };
+        }
+        return null;
+      };
+      let best = null;
+      for (const i of pool) for (const j of pool) {
+        if (i === j || !solo[i]) continue;
+        for (const f of [0.25, 0.5, 0.75]) {
+          const p1 = partial(solo[i], f);
+          if (!p1) continue;
+          const s2 = L[j](sanitize({ ...v, ...p1.set }).values, p1.G2);
+          if (!s2 || !s2.feasible || !s2.set) continue;
+          const score = Math.max(p1.effort, s2.effort), sum = p1.effort + s2.effort;
+          if (!best || score < best.score - 1e-12 || (Math.abs(score - best.score) <= 1e-12 && sum < best.sum)) best = { score, sum, p1, i, s2 };
+        }
+      }
+      if (best && (best.score < bestEff || !cards.length)) {
+        const set = { ...best.p1.set, ...best.s2.set };
+        const G2 = best.s2.goal2 || best.p1.G2;
+        if (meets(sanitize({ ...v, ...set }).values, G2)) {
+          const first = { ...solo[best.i], change: best.p1.change, set: best.p1.set, effort: best.p1.effort, parts: best.p1.parts,
+            steps: best.p1.steps || [], size: sizeOf(best.p1.effort), flags: best.p1.flags, feasible: true };
+          delete first.reason;
+          // The combo carries both parts' labels, once each.
+          const flags = [], seenF = new Set();
+          for (const f of best.p1.flags.concat(best.s2.flags || [])) {
+            const k = f.code + ":" + (f.key || "");
+            if (!seenF.has(k)) { seenF.add(k); flags.push(f); }
+          }
+          const combo = make(v, G, { id: "combo", kind: "combo", change: null, set, effort: best.score,
+            parts: best.p1.parts + best.s2.parts, G2, steps: (best.p1.steps || []).concat(best.s2.steps || []), flags });
+          combo.pair = [first, best.s2];
+          cards.push(combo);
+          // Ranked by its own score with the single steps (renting instead stays last).
+          cards.sort(byKey);
+        }
+      }
+    }
+    out.list = cards;
+    out.rejected = rejected;
+    out.best = cards[0] || null;
+    return out;
   }
 
   // ---------- sliders ----------
@@ -920,7 +1582,9 @@
     realReturn, fireNumber, coastNumber, annuityFactor, hsaLimit, parseNumber, cleanField, sanitize,
     partnerBase, planOf, fullPlanOf, contribAt, path, balanceAtRet, earliestCoast, neverCoastAge, project, grid,
     lifeExpectancy, sepPayment, sepLockEnd, bridge, rothBasisEstimate,
-    PMI_END, mortgagePayment, loanBalance, homeTerms, buyPath, firstReach, house,
+    PMI_END, mortgagePayment, loanBalance, homeTerms, buyPath, firstReach, fiBuy, house,
+    YEAR_EFFORT, COMBO_TAU, LEVER_ORDER, goalOf, goalPlan, houseApplies, measure, margin, bisect, scanAge,
+    allocate, unallocate, suggest,
     fmtMoney, fmtCompact, encodeHash, decodeHash, sliderToValue, valueToSlider, niceRound,
   };
   root.CoastFire = api;

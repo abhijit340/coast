@@ -35,16 +35,7 @@
 
   // ---------- summary lines ----------
 
-  // The off-track sentence under the headline (and the summary of the full nudge list).
-  function nudgeLine(res) {
-    const v = res.inputs, R = v.retAge;
-    const parts = [];
-    if (res.requiredAnnual !== null && res.requiredAnnual > 0) parts.push(`save ~${kRound(res.requiredAnnual)}/yr`);
-    parts.push(res.retireLater ? `retire at ${res.retireLater}` : "retire later");
-    parts.push(`spend ~${kRound(res.spendWithin)}/yr`);
-    const list = parts.length > 1 ? parts.slice(0, -1).join(", ") + ", or " + parts[parts.length - 1] : parts[0];
-    return `To get there by ${R}: ${list}.`;
-  }
+  // Read "~" aloud as "about".
   const spoken = (s) => s.replace(/~/g, "about ");
 
   function kpiSummary(res) {
@@ -177,6 +168,334 @@
   }
 
 
+  // ---------- suggestions: "Ways to reach your goal" (SPEC 12.7) ----------
+
+  const DISCLAIMER = "Educational estimates from this model, not financial advice. Taxes, catch-up contributions, " +
+    "income limits and account rules aren't modeled and can change what makes sense.";
+  const SIZE_LABEL = { small: "Small", medium: "Medium", big: "Big stretch", veryBig: "Very big" };
+  const yrsW = (n) => `${n} yr${n === 1 ? "" : "s"}`;
+  const yearsW = (n) => `${n} ${n === 1 ? "year" : "years"}`;
+  const pct0 = (x) => Math.round(x * 100) + "%";
+  // "an 11.1%", "an 8.0%", "a 7.0%": the article for a number read aloud.
+  const art = (txt) => (/^(8|11|18)(\D|$)/.test(txt) || /^8\d/.test(txt) ? "an " : "a ");
+
+  function accountName(key, two) {
+    if (key === "hsa") return "HSA";
+    if (key === "taxSave") return "Other investing";
+    const base = key.startsWith("roth") ? "Roth IRA" : "401(k)";
+    return two ? `Partner ${key.slice(-1)} ${base}` : base;
+  }
+
+  // A short action, as in "Best: …" and in the hero line (both round the same way: "$19.7K").
+  function phrase(s, sg, forLine) {
+    const v = sg.inputs, c = s.change, two = !!v.two;
+    switch (s.id) {
+      case "save": return `save ${cmp(c.delta)}/yr more`;
+      case "spend": return forLine ? `spend ${cmp(c.to)}/yr` : `plan on ${cmp(c.to)}/yr`;
+      case "retLater": return `retire at ${c.to}`;
+      case "coastBoth": return `keep saving to ${c.to}`;
+      case "coastA": case "coastB": return `${s.who} keeps saving to ${c.to}`;
+      case "drawLess": return `draw ${cmp(c.to)}/yr`;
+      case "buyLater": return `buy at ${c.to}`;
+      case "price": return `a home around ${cmp(c.to)}`;
+      case "down": return `put ${c.to}% down`;
+      case "noBuy": return "rent instead";
+      case "combo": return s.pair.map((p) => phrase(p, sg, forLine)).join(" + ");
+      case "coastSooner": return s.who === "both" || !two ? `coast ${yrsW(-c.delta)} sooner` : `${s.who} could coast ${yrsW(-c.delta)} sooner`;
+      case "retireSooner": return `retire ${yrsW(-c.delta)} sooner`;
+      case "spendMore": return `spend ${cmp(c.delta)}/yr more`;
+      case "saveLess": return `save ${cmp(-c.delta)}/yr less`;
+      case "drawMore": return `draw ${cmp(c.delta)}/yr more`;
+      default: return "";
+    }
+  }
+
+  // The summary of the closed "Ways to reach your goal" row (fits one line at 375px).
+  function suggestSummary(sg) {
+    if (sg.status === "badAges") return "Fix the ages first";
+    if (sg.status === "fiNow") return "You're already there";
+    const b = sg.best;
+    if (sg.status === "met") return b ? `On track: could ${phrase(b, sg)}` : "On track";
+    if (!b) return "No single step gets there";
+    let tail = "";
+    if (b.id === "save") tail = b.steps.length === 1 ? ` (${accountName(b.steps[0].key, sg.inputs.two)})` : ` (${b.steps.length} accounts)`;
+    const t = `Best: ${phrase(b, sg)}${tail}`;
+    return b.kind === "combo" && t.length > 46 ? "Best: two smaller steps" : t;
+  }
+
+  const goalWords = (sg) => {
+    const G = sg.goal, R = sg.inputs.retAge;
+    return G.type === "coast" ? `coast by ${G.X}` : G.type === "early" ? `FI by ${G.T}` : `retire by ${R}`;
+  };
+
+  // The hero's one off-track sentence (short only): the closest single steps on three levers.
+  function suggestLine(sg) {
+    if (sg.status !== "short") return "";
+    const pick = ["save", "retLater", "spend"].map((id) => sg.list.find((s) => s.id === id)).filter(Boolean);
+    const parts = (pick.length ? pick : sg.best ? [sg.best] : []).map((s) => phrase(s, sg, true));
+    const where = sg.goal.type === "retire" ? "" : ` to ${goalWords(sg)}`;
+    // The hero shows the renting plan; with a home purchase the engine judges buying, so say so
+    // and give that scenario's own gap (SPEC 12.5).
+    let lead = "";
+    if (sg.scenario === "buy") {
+      const P = sg.progress, gap = P && P.metric === "balance" ? P.need - P.have : 0;
+      lead = gap > 0.5 ? `If you buy at ${sg.buyAge}, you'd be ${cmp(gap)} short. ` : `If you buy at ${sg.buyAge}: `;
+    }
+    const cap = (t) => (lead && !lead.endsWith(". ") ? t.charAt(0).toLowerCase() + t.slice(1) : t);
+    if (!parts.length) return lead + cap(`No single step gets you there${where}; see the ways below.`);
+    const list = parts.length > 1 ? parts.slice(0, -1).join(", ") + ", or " + parts[parts.length - 1] : parts[0];
+    return lead + cap(`Closest steps${where}: ${list}.`);
+  }
+
+  function goalText(sg) {
+    const G = sg.goal, R = sg.inputs.retAge;
+    if (G.type === "coast") return `Coast by ${G.X}`;
+    if (G.type === "early") return `Financially independent by ${G.T}`;
+    return `Retire by ${R}`;
+  }
+
+  // The status line above the meter.
+  function statusText(sg) {
+    const v = sg.inputs, R = v.retAge, G = sg.goal, P = sg.progress;
+    if (sg.status === "badAges") return "Set a retirement age after your current age.";
+    if (sg.status === "fiNow") return "You already have your FIRE number today.";
+    const met = sg.status === "met";
+    // With a home purchase the engine judges buying, while the hero shows renting: name it.
+    const buy = sg.scenario === "buy" ? `With the home purchase at ${sg.buyAge}, ` : "";
+    if (G.type === "early") {
+      const a = P.fiFrac !== undefined && P.fiFrac !== null ? +P.fiFrac.toFixed(1) : P.fiAge;
+      const pace = buy ? `${buy}saving at full pace` : "Saving at full pace";
+      if (a === null) return `${pace}, you don't reach your FIRE number by ${sg.fi.top}.`;
+      const d = +Math.abs(G.T - a).toFixed(1);
+      return met ? `On track: ${pace.charAt(0).toLowerCase() + pace.slice(1)}, you'd be FI at about ${a}${a < G.T && d > 0 ? `, ${yrsW(d)} early` : ""}.`
+        : `${pace}, you'd be FI at about ${a}, ${yrsW(d)} after ${G.T}.`;
+    }
+    const coast = G.type === "coast" ? `${v.two ? "both coasting" : "coasting"} at ${G.X}, you reach` : "";
+    const subj = coast ? (buy ? buy + coast : coast.charAt(0).toUpperCase() + coast.slice(1)) : buy ? `${buy}your plan reaches` : "Your plan reaches";
+    const gap = Math.abs(P.have - P.need);
+    if (met) {
+      const low = subj.charAt(0).toLowerCase() + subj.slice(1);
+      // Within 1% (or the two round alike): one figure, not "$1.78M ... more than $1.78M".
+      if (gap < 0.01 * P.need || cmp(P.have) === cmp(P.need)) return `On track, just barely: ${low} your ${cmp(P.need)} by ${R}, with ${cmp(gap)} to spare.`;
+      return `On track: ${low} ${cmp(P.have)} by ${R}, ${cmp(gap)} more than the ${cmp(P.need)} you need.`;
+    }
+    return `${subj} ${cmp(P.have)} of ${cmp(P.need)} by ${R}: ${cmp(gap)} short.`;
+  }
+
+  function progressText(sg) {
+    const P = sg.progress;
+    if (!P) return "";
+    const at = P.metric === "fiAge" ? ` at ${sg.goal.T}` : "";
+    return `${cmp(P.have)} of ${cmp(P.need)}${at} · ${Math.round(Math.min(9.99, P.pct) * 100)}%`;
+  }
+
+  function sensitivityText(sg) {
+    const s = sg.sensitivity;
+    if (!s || (sg.status !== "short" && sg.status !== "met")) return "";
+    const G = sg.goal;
+    const subj = G.type === "retire" ? "your plan as entered" : G.type === "coast" ? `coasting at ${G.X}` : `being FI by ${G.T}`;
+    const tail = " This shows how sensitive the plan is; it isn't something to plan on.";
+    const ret = s.needReturn !== null ? p1(s.needReturn) : null, swr = s.needSwr !== null ? p1(s.needSwr) : null;
+    if (sg.status === "met") {
+      const parts = [];
+      if (ret) parts.push(`down to ${art(ret)}${ret} return a year before inflation (you assume ${p1(s.haveReturn)})`);
+      // A lower withdrawal rate is the more cautious one, so the plan holds for any rate down to this.
+      if (swr) parts.push(`with a withdrawal rate as low as ${swr} (you assume ${p1(s.haveSwr)})`);
+      return parts.length ? `For reference, ${subj} still works ${parts.join(", or ")}.${tail}` : "";
+    }
+    const parts = [];
+    if (ret) parts.push(`${art(ret)}${ret} return a year before inflation (you assume ${p1(s.haveReturn)})`);
+    if (swr) parts.push(`${art(swr)}${swr} withdrawal rate (you assume ${p1(s.haveSwr)})`);
+    if (!parts.length) return `For reference, no return or withdrawal rate in this model's range gets ${subj} there.`;
+    return `For reference, ${subj} would need ${parts.join(", or ")}.${tail}`;
+  }
+
+  // One line per account changed, all in one form: "HSA $1,400 → $8,750 (family limit)",
+  // "Partner A Roth IRA $3,200 → $7,500 (limit)".
+  function splitLines(steps, v) {
+    const two = !!v.two;
+    return steps.map((s) => {
+      const lim = !s.atLimit ? "" : s.key === "hsa" ? (v.hsaFamily ? " (family limit)" : " (limit)") : " (limit)";
+      const name = s.key === "taxSave" ? "Other investing (taxable)" : accountName(s.key, two);
+      return `${name} ${money(s.from)} → ${money(s.to)}${lim}`;
+    });
+  }
+
+  const FLAG_CHIP = {
+    rothIncome: ["warn", "Roth income limits apply"],
+    hsaEligibility: ["warn", "Needs an HSA-eligible plan"],
+    catchUp: ["neutral", "Catch-up (50+) not modeled"],
+    overPay: ["bad", "More than your pay"],
+    bigCut: ["warn", "Large cut"],
+    bridge: ["warn", "Before 59½: see the bridge"],
+  };
+  const REASON = {
+    noYearsLeft: (s, sg) => (sg.goal.type === "coast" ? `coasting at ${sg.goal.X} leaves no years to save` : `no years left before ${sg.goal.T}`),
+    notByTop: () => "not even by 100",
+    notByRet: (s, sg) => (s.id === "coastBoth" ? `not even coasting at ${sg.inputs.retAge - 1}` : `not even saving to ${sg.inputs.retAge}`),
+    belowZero: () => "not even at $0",
+    exceedsPay: () => "it would take more than your pay",
+    noPay: () => "no salary to save from",
+    noEffect: () => "no amount gets there",
+    rentShort: () => "renting falls short too",
+    tooLate: (s) => `would take until ${s.change.to}`,
+    belowFloor: (s) => (s.id === "price" ? `would take a home around ${money(s.change.to)}` : `would take ${money(s.change.to)}/yr`),
+    cashShort: (s) => `more cash at closing than the portfolio holds${s.cashShort ? ` (${money(s.cashShort)} short)` : ""}`,
+  };
+  const NOUN = {
+    save: "saving more", spend: "spending less", retLater: "retiring later", coastBoth: "coasting later",
+    coastA: "A coasting later", coastB: "B coasting later", drawLess: "drawing less", buyLater: "buying later",
+    price: "a cheaper home", down: "a bigger down payment", noBuy: "renting instead",
+  };
+  function reasonText(s, sg) { return (REASON[s.reason] || (() => "doesn't get there"))(s, sg); }
+
+  // The muted line for levers that can't do it alone.
+  function rejectedText(sg) {
+    if (sg.status !== "short" || !sg.rejected.length) return "";
+    return "Not on its own: " + sg.rejected.map((s) => `${NOUN[s.id] || s.id} (${reasonText(s, sg)})`).join("; ") + ".";
+  }
+
+  // The effect line. Each option can have its own FIRE number (spending, the home, the age), so a
+  // different target is named as "the $X you'd need", and spending is said as coverage.
+  function effectText(s, sg) {
+    const e = s.effect, v = sg.inputs, c = s.change;
+    if (!e) return "";
+    if (e.metric === "fiAge") {
+      if (e.fiAge === null) return "Still not FI by 100";
+      const at = e.after !== null && e.after !== undefined ? +e.after.toFixed(1) : e.fiAge;
+      const d = e.yearsSooner;
+      return d !== null && d > 0.05 ? `FI ${d.toFixed(1)} yrs sooner, at about ${at}` : `FI at about ${at}`;
+    }
+    const R2 = s.set && s.set.retAge !== undefined ? s.set.retAge : v.retAge;
+    if (s.id === "noBuy") return `Renting reaches ${cmp(e.after)} of the ${cmp(e.target)} it needs by ${R2}`;
+    if (s.id === "spend" || s.id === "spendMore") {
+      return `Your ${cmp(e.after)} would cover ${money(c.to)}/yr` + (sg.scenario === "rent" ? ` at your ${p1(v.swr)} withdrawal rate` : " with the home's costs");
+    }
+    const P = sg.progress, same = P && Math.abs(e.target - P.need) <= 0.005 * Math.max(1, P.need);
+    const when = R2 === v.retAge ? "by" : "at";
+    if (s.kind === "opportunity") return same ? `Still reaches your ${cmp(e.target)} ${when} ${R2}` : `Still reaches the ${cmp(e.target)} you'd need ${when} ${R2}`;
+    if (!same) return `Reaches the ${cmp(e.target)} you'd need ${when} ${R2} (now ${cmp(e.before)})`;
+    if (s.id === "retLater") return `Reaches ${cmp(e.after)} at ${R2}`;
+    return `Reaches ${cmp(e.after)} by ${R2} (now ${cmp(e.before)})`;
+  }
+
+  // Everything a card says: {title, detail, effect, chips:[{tone, word}], split, why, note, side, sizeLabel}.
+  function cardText(s, sg) {
+    const v = sg.inputs, R = v.retAge, two = !!v.two, c = s.change, G = sg.goal;
+    const pay = (v.salA || 0) + (two ? v.salB || 0 : 0);
+    const out = { title: "", detail: "", effect: effectText(s, sg), chips: [], split: [], why: "", note: "", side: "",
+      sizeLabel: s.size ? `Effort: ${SIZE_LABEL[s.size].toLowerCase()}` : "" };
+    const other = (p) => (p === "A" ? "B" : "A");
+    switch (s.id) {
+      case "save":
+        out.title = `Save ${money(c.delta)}/yr more`;
+        out.detail = `${money(c.delta / 12)}/mo${two ? " together" : ""}` + (pay > 0 ? ` · ${pct0(c.delta / pay)} of pay` : "");
+        out.split = splitLines(s.steps, v);
+        out.why = "Why this order: a common general order (an HSA, then Roth IRAs, then 401(k)s, then taxable), not advice for you. " +
+          "This model gives every account the same return and no taxes, so the projection is the same whichever account gets the money.";
+        out.note = "If your plan matches, contributing enough to get the whole match usually comes first.";
+        out.side = `Take-home about ${money(Math.round(c.delta / 12 / 10) * 10)}/mo lower (before tax effects).`;
+        if (pay > 0) out.chips.push({ tone: s.flags.some((f) => f.code === "highShare") ? "warn" : "neutral", word: `${pct0((c.delta) / pay)} of pay` });
+        break;
+      case "spend":
+        out.title = `Plan on ${money(c.to)}/yr in retirement`;
+        out.detail = `${pct0(-c.delta / c.from)} less than your ${money(c.from)} plan`;
+        break;
+      case "retLater":
+        out.title = `Retire at ${c.to} instead of ${c.from}`;
+        out.detail = `${c.delta} more working ${c.delta === 1 ? "year" : "years"}`;
+        break;
+      case "coastBoth":
+        out.title = `Keep saving until ${c.to}, not ${c.from}`;
+        out.detail = `${yearsW(c.delta)} more before ${two ? "you both coast" : "you coast"}`;
+        break;
+      case "coastA": case "coastB":
+        if (G.type === "coast") {
+          out.title = `Only ${s.who} keeps saving to ${c.to}`;
+          out.detail = `${other(s.who)} still coasts at ${G.X}`;
+          if (s.set.goal === 1) out.note = `Also sets your goal to Retire by ${R}, with this coast plan.`;
+        } else {
+          out.title = `${s.who} keeps saving to ${c.to}, not ${c.from}`;
+          out.detail = `${yearsW(c.delta)} more before ${s.who} coasts`;
+        }
+        break;
+      case "drawLess":
+        out.title = `Draw ${money(c.to)}/yr while coasting`;
+        out.detail = `${money(-c.delta)} less than ${money(c.from)}`;
+        break;
+      case "buyLater":
+        out.title = `Buy at ${c.to} instead of ${c.from}`;
+        out.detail = `${yearsW(c.delta)} more renting`;
+        break;
+      case "price":
+        out.title = `A home around ${money(c.to)}`;
+        out.detail = `${money(-c.delta)} less than ${money(c.from)}`;
+        break;
+      case "down":
+        out.title = `Put ${c.to}% down instead of ${+c.from.toFixed(1)}%`;
+        out.detail = `${money(v.price * c.delta / 100)} more at closing`;
+        break;
+      case "noBuy":
+        out.title = "Rent instead of buying";
+        out.detail = "Switches off Buying a home";
+        break;
+      case "combo":
+        out.title = `Two smaller steps: ${phrase(s.pair[0], sg)} and ${phrase(s.pair[1], sg)}`;
+        out.split = s.pair.map((p) => cardText(p, sg).title);
+        out.detail = "Two smaller changes instead of one big one";
+        if (s.pair.some((p) => p.id === "save")) {
+          out.why = "Why this order: a common general order (an HSA, then Roth IRAs, then 401(k)s, then taxable), not advice for you. " +
+            "This model gives every account the same return and no taxes.";
+        }
+        break;
+      case "coastSooner": {
+        const all = s.who === "both" || !two, subj = all ? (two ? "Both of you" : "You") : s.who;
+        out.title = c.to <= v.age ? `${subj} could stop saving now` : `${subj} could stop saving at ${c.to} instead of ${c.from}`;
+        out.detail = all ? `${yearsW(-c.delta)} sooner` : `${yearsW(-c.delta)} sooner; ${other(s.who)} keeps their plan`;
+        if (s.set.goal === 1) out.detail += `; also sets your goal to Retire by ${R}`;
+        break;
+      }
+      case "retireSooner":
+        out.title = `Retire at ${c.to}, ${yrsW(-c.delta)} sooner`;
+        out.detail = `${yearsW(-c.delta)} less working`;
+        break;
+      case "spendMore":
+        out.title = `Spend up to ${money(c.to)}/yr (+${money(c.delta)})`;
+        out.detail = `In retirement, instead of ${money(c.from)}`;
+        break;
+      case "saveLess":
+        out.title = `Save ${money(-c.delta)}/yr less and still make it`;
+        out.detail = `${money(-c.delta / 12)}/mo${two ? " together" : ""}`;
+        out.split = splitLines(s.steps, v);
+        out.side = `Take-home about ${money(Math.round(-c.delta / 12 / 10) * 10)}/mo higher (before tax effects).`;
+        break;
+      case "drawMore":
+        out.title = `Draw up to ${money(c.to)}/yr while coasting (+${money(c.delta)})`;
+        out.detail = `Instead of ${money(c.from)}`;
+        break;
+      default: break;
+    }
+    // Under a coast goal the patch also turns the coast switches on (calc.js make); say so once.
+    const G2 = s.goal2 || G;
+    if (G2.type === "coast" && s.set && s.set.coastOnA && !/^coast/.test(s.id) && s.kind !== "opportunity") {
+      const X = s.set.coastAgeA;
+      out.note = (out.note ? out.note + " " : "") + `Also sets ${two ? "both of you" : "you"} to coast at ${X}.`;
+    }
+    const seen = new Set();
+    for (const f of s.flags || []) {
+      const ch = FLAG_CHIP[f.code];
+      if (ch && !seen.has(f.code)) { seen.add(f.code); out.chips.push({ tone: ch[0], word: ch[1] }); }
+    }
+    if (!s.feasible) out.chips.push({ tone: "bad", word: `Not possible: ${reasonText(s, sg)}` });
+    return out;
+  }
+
+  // "Applied: save $19,700/yr more."
+  function appliedText(s, sg) {
+    const t = cardText(s, sg).title;
+    return `Applied: ${t.charAt(0).toLowerCase()}${t.slice(1)}.`;
+  }
+
   // ---------- touch-safe sliders (SPEC 2.1) ----------
   // On a touch screen a range input jumps to wherever a finger lands and grabs vertical
   // swipes meant for the page. guardSlider() takes touches over instead: only a sideways
@@ -303,7 +622,9 @@
 
   const api = {
     UI_KEY, HINT_KEY, parseOpen, withOpen, isOpenIn,
-    nudgeLine, spoken, kpiSummary, contribSummary, ecSummary, sparkSummary, partnerSummary, afterCoast, heatSummary, hsaSummary,
+    spoken, kpiSummary,
+    DISCLAIMER, SIZE_LABEL, accountName, phrase, suggestSummary, suggestLine, goalText, statusText, progressText,
+    sensitivityText, splitLines, rejectedText, effectText, cardText, appliedText, contribSummary, ecSummary, sparkSummary, partnerSummary, afterCoast, heatSummary, hsaSummary,
     drawSummary, assumeSummary, bridgeSummary, houseSummary, houseCostsSummary, houseHowSummary, breakevenSummary,
     SLOP, REACH, classifyGesture, gestureEnd, gestureFinish, thumbCenter, nearThumb, dragValue, guardSlider,
   };

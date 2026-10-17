@@ -53,13 +53,38 @@
         </div>
       </div>
       <blockquote class="pull"><p id="headline" aria-live="polite"></p></blockquote>
-      <details class="dis nudge-d" id="d-nudge" hidden>
-        <summary class="sum"><span class="sum-n" id="nudge-line" aria-hidden="true"></span><span class="visually-hidden" id="nudge-sr"></span></summary>
-        <div class="dis-body"><div class="nudge" id="nudge" hidden></div></div>
-      </details>
+      <p class="sug-line" id="suggest-line" hidden><span id="suggest-text" aria-hidden="true"></span><span class="visually-hidden" id="suggest-sr"></span> <button type="button" class="linkish" id="suggest-go" aria-controls="d-suggest">See all ways</button></p>
       <p class="br-hero" id="br-hero" hidden><span class="chip" id="br-hero-chip"></span><button type="button" class="linkish" id="br-hero-go" aria-controls="d-bridge">before 59½: see the bridge</button></p>
       <p id="warn" class="warn" hidden></p>
     </section>
+
+    <details class="dis sug-d" id="d-suggest">
+      <summary class="sum stack"><span class="sum-t" id="sug-t">Ways to reach your goal</span><span class="sum-v" id="sug-sum"></span></summary>
+      <div class="dis-body sug-body">
+        <h3 class="mini-title" id="goal-h">Your goal</h3>
+        <div class="seg seg3" role="group" aria-labelledby="goal-h">
+          <button type="button" id="goal-retire" aria-pressed="false">Retire<small id="goal-retire-s">by 65</small></button>
+          <button type="button" id="goal-coast" aria-pressed="false">Coast<small id="goal-coast-s">by an age</small></button>
+          <button type="button" id="goal-early" aria-pressed="false">Retire early<small>as soon as possible</small></button>
+        </div>
+        <p class="fine goal-note" id="goal-note"></p>
+        <div id="goal-fields"></div>
+        <div class="goal-chips" id="goal-chips" role="group" aria-label="Aim for financial independence sooner" hidden>
+          <button type="button" class="btn ghost sm" data-sooner="1">1 yr sooner</button>
+          <button type="button" class="btn ghost sm" data-sooner="3">3 yrs sooner</button>
+          <button type="button" class="btn ghost sm" data-sooner="5">5 yrs sooner</button>
+        </div>
+        <p class="fine sug-scn" id="sug-scn" hidden></p>
+        <p class="sug-status" id="sug-status" tabindex="-1"></p>
+        <div class="meter" id="sug-meter" role="img" aria-label=""><i class="meter-fill" id="sug-fill"></i><b class="meter-mark" id="sug-mark"></b></div>
+        <p class="fine sug-prog" id="sug-prog" aria-hidden="true"></p>
+        <p class="fine sug-cushion" id="sug-cushion" hidden>Each of these lands right on your number, with no cushion.</p>
+        <ol class="sug-list" id="sug-list"></ol>
+        <p class="fine sug-rej" id="sug-rejected" hidden></p>
+        <p class="fine sug-sens" id="sug-sens" hidden></p>
+        <p class="fine sug-dis" id="sug-dis"></p>
+      </div>
+    </details>
 
     <section class="card chart-card" aria-labelledby="chart-title">
       <div class="card-head"><div class="grow"><h2 id="chart-title">Your path to 65</h2><p class="fine" id="chart-sub"></p></div></div>
@@ -139,6 +164,10 @@
           <div id="hsa-fields"></div>
         </div>
       </details>
+      <details class="dis" id="d-tax">
+        <summary class="sum"><span class="sum-t">Other investing</span><span class="sum-v" id="sv-tax"></span></summary>
+        <div class="dis-body"><div id="tax-fields"></div></div>
+      </details>
     </section>
 
     <section class="group house-g" aria-label="Buying a home">
@@ -211,7 +240,7 @@
           <h3 id="ct-title" class="mini-title">Total going in each year</h3>
           <div class="total"><b id="ct-total"></b><span class="fine" id="ct-sub"></span></div>
           <ul class="legend" aria-hidden="true">
-            <li><i class="sq c1"></i>401(k)</li><li><i class="sq c2"></i>Employer</li><li><i class="sq c3"></i>Roth IRA</li><li><i class="sq c4"></i>HSA</li>
+            <li><i class="sq c1"></i>401(k)</li><li><i class="sq c2"></i>Employer</li><li><i class="sq c3"></i>Roth IRA</li><li><i class="sq c4"></i>HSA</li><li id="lg-tax" hidden><i class="sq c5"></i>Taxable</li>
           </ul>
           <svg class="bars" id="bars-svg" role="img" aria-label="Contributions by partner"></svg>
           <p class="hint keep" id="ct-after"></p>

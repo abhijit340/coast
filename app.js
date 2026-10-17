@@ -32,7 +32,8 @@ syncTouchGuard();
 if (coarse.addEventListener) coarse.addEventListener("change", syncTouchGuard);
 
 let values = { ...CF.DEFAULTS };
-let result = null, gridRes = null, bridgeRes = null, houseRes = null;
+let result = null, gridRes = null, bridgeRes = null, houseRes = null, sugRes = null;
+let sliderMoving = false; // true while a slider's own input event runs (suggest is then throttled)
 let hover = null;            // index into result.points the crosshair sits on, or null
 let viewingShared = false;   // showing a shared link's numbers; not saved until edited or kept
 const notes = {};            // per field: { err, adj }
@@ -88,6 +89,9 @@ const META = {
   maint: { label: "Maintenance", unit: "%/yr", hint: "Each year, as a share of the home's value. Real repairs come in lumps, not 1% a year." },
   apprec: { label: "Home price growth above inflation", unit: "%/yr", mode: "text", hint: "How fast the home's value grows after you buy, after inflation." },
   rentGrowth: { label: "Rent growth above inflation", unit: "%/yr", mode: "text", hint: "How fast that rent grows after inflation. 0% means it keeps pace with prices." },
+  // Suggestions (SPEC 12)
+  goalAge: { label: "Coast by age", unit: "yrs", mode: "numeric" },
+  taxSave: { label: "Other investing (taxable)", pre: true, unit: "/yr" },
 };
 const metaOf = (key) => META[key] || META[key.slice(0, -1)];
 const partnerOf = (key) => (/[AB]$/.test(key) && !META[key] ? key.slice(-1) : null);
@@ -140,6 +144,8 @@ function buildInputs() {
   $("card-A").innerHTML = partnerHTML("A");
   $("card-B").innerHTML = partnerHTML("B");
   $("hsa-fields").innerHTML = fieldHTML("hsa");
+  $("tax-fields").innerHTML = fieldHTML("taxSave");
+  $("goal-fields").innerHTML = fieldHTML("goalAge");
   $("bridge").innerHTML = `
     <div class="teaser" id="br-teaser"></div>
     <div id="br-full" hidden>
@@ -151,7 +157,7 @@ function buildInputs() {
   $("house-rate-fields").innerHTML = fieldHTML("mortRate");
   $("house-rent-fields").innerHTML = fieldHTML("rent");
   $("house-cost-fields").innerHTML = ["closePct", "sellPct", "propTax", "insure", "maint", "pmi", "apprec", "rentGrowth"].map(fieldHTML).join("");
-  for (const id of ["hh-fields", "assume-fields", "draw-fields", "hsa-fields", "br-fields", "house-fields", "house-cost-fields"]) $(id).querySelector(".field").classList.add("first");
+  for (const id of ["hh-fields", "assume-fields", "draw-fields", "hsa-fields", "tax-fields", "goal-fields", "br-fields", "house-fields", "house-cost-fields"]) $(id).querySelector(".field").classList.add("first");
 }
 
 // ---------- loading and saving ----------
@@ -358,8 +364,11 @@ function wireField(key) {
     box.value = fieldText(key, values[key]);
     notes[key] = { err: "", adj: "" };
     setSlider(key, true);
-    userChanged();
+    sliderMoving = true;
+    try { userChanged(); } finally { sliderMoving = false; }
   });
+  // The drag (or arrow key) is done: the suggestions catch up now, not on the trailing timer.
+  slider.addEventListener("change", () => { if (sugTimer) runSuggest(); });
   // Touch: only a sideways drag from the thumb changes the value (ui.js guardSlider), and
   // each such drag offers an Undo.
   const field = slider.closest(".field");
@@ -477,7 +486,6 @@ function heroState(res) {
   return {
     chip: ["bad", "alert", planCoasts ? `${cmp(short)} short saving to ${R}` : `${cmp(short)} short`], big: `Not by ${R}`, words: true, cap: "saving the whole way isn't enough yet",
     head: `Not quite on course yet. At <strong>${kRound(res.start.total)}/yr</strong>${Number.isFinite(res.firstCoast) && res.firstCoast < R ? " saving the whole way," : ""} you reach <strong>${cmp(res.fullBalance)}</strong> by ${R}, short of <strong>${cmp(res.fire)}</strong>.`,
-    nudge: true,
   };
 }
 
@@ -488,21 +496,13 @@ function renderHero(res) {
   $("hero-age").classList.toggle("words", !!st.words);
   $("hero-age").parentElement.classList.toggle("stack", !!st.words);
   $("hero-cap").textContent = st.cap;
-  $("headline").innerHTML = st.head;
+  // With Buying a home on, the hero stays the renting plan (SPEC 11.5) while the suggestions judge
+  // buying: tag the hero so the two gaps read as different scenarios.
+  const scn = houseRes && houseRes.applies && !res.warnings.includes("retAgeNotAfterAge")
+    ? ` <span class="hero-scn">Renting, without the home purchase.</span>` : "";
+  $("headline").innerHTML = st.head + scn;
 
-  const nudge = $("nudge");
-  nudge.hidden = !st.nudge;
-  $("d-nudge").hidden = !st.nudge;
-  if (st.nudge) {
-    const line = UI.nudgeLine(res);
-    $("nudge-line").textContent = line;
-    $("nudge-sr").textContent = UI.spoken(line) + " Details.";
-    const together = two() ? " together" : "";
-    const items = [`save about <b>${kRound(res.requiredAnnual)}/yr</b>${together} (now ${kRound(res.start.total)})`];
-    items.push(res.retireLater ? `retire at <b>${res.retireLater}</b> instead of ${R}` : "retire later");
-    items.push(`spend about <b>${kRound(res.spendWithin)}/yr</b> in retirement (now ${kRound(v.spend)})`);
-    nudge.innerHTML = `<b>To get there by ${R}, any one of these would do it:</b><ul>${items.map((i) => `<li>${i}</li>`).join("")}</ul>`;
-  }
+  renderSuggestLine();
 
   // Ring: share of today's coast number already invested.
   const badAges = res.warnings.includes("retAgeNotAfterAge");
@@ -586,6 +586,9 @@ function renderInputs(res) {
   $("assume-vals").setAttribute("aria-label", as.label);
   $("sv-draw").textContent = UI.drawSummary(res);
   $("sv-hsa").textContent = UI.hsaSummary(v);
+  $("sv-tax").textContent = v.taxSave > 0 ? `${money(v.taxSave)}/yr` : "none";
+  $("h-taxSave").textContent = (v.two ? "Brokerage saving for the household, split evenly here; each half follows its partner's coast plan. "
+    : "Brokerage saving each year; it stops when you coast. ") + "No tax advantage in real life; the model treats every account the same.";
   $("h-retAge").textContent = v.retAge < 59.5 ? "Before 59½: see the early-access bridge below." : "Set it below 59½ to plan an early-access bridge.";
   $("h-nominal").textContent = `Before inflation. Real return: ${(res.r * 100).toFixed(2)}% a year.`;
   $("h-inflation").textContent = "Everything is shown in today's dollars.";
@@ -1131,6 +1134,8 @@ function renderContrib(res) {
   // Family coverage with two people is one shared account; self-only is one account each.
   const hsaLabel = !v.two ? "HSA" : v.hsaFamily ? "HSA (shared)" : "HSAs (A + B)";
   rows.push({ label: hsaLabel, segs: [[v.hsa, "c4", "HSA"]], total: v.hsa });
+  if (v.taxSave > 0) rows.push({ label: "Taxable", segs: [[v.taxSave, "c5", "Other investing"]], total: v.taxSave });
+  $("lg-tax").hidden = !(v.taxSave > 0);
   const max = Math.max(1, ...rows.map((r) => r.total));
   const step = niceStep(max / 2.5);
   const top = Math.max(step, Math.ceil(max / step) * step);
@@ -1274,6 +1279,181 @@ function applyCoast(who) {
   const who2 = who === "both" ? (values.two ? "A and B coast" : "You coast") : `${who} coasts`;
   toast(`Applied: ${who2} from ${e.age}. `, toastButton("Undo", () => { values = before; showAll(); update(); toast("Back to your previous plan."); }));
 }
+
+// ---------- suggestions: "Ways to reach your goal" (SPEC 12) ----------
+
+const TONE_ICON = { good: "check", warn: "alert", bad: "alert" };
+
+// The hero's one off-track sentence from the suggestions engine (SPEC 12.5), only while short.
+function renderSuggestLine() {
+  const line = sugRes ? UI.suggestLine(sugRes) : "";
+  $("suggest-line").hidden = !line;
+  $("suggest-text").textContent = line;
+  $("suggest-sr").textContent = UI.spoken(line);
+}
+
+// CF.suggest re-solves every lever (tens of ms with the home on, several times that on a phone),
+// so while a slider moves it runs at most every 150 ms, with a trailing run for the last value.
+// Everything else on the page stays live; a typed or tapped change runs it at once.
+const SUGGEST_EVERY = 150;
+let sugTimer = 0, sugLast = 0;
+function runSuggest() {
+  clearTimeout(sugTimer); sugTimer = 0;
+  sugLast = Date.now();
+  sugRes = CF.suggest(values);
+  renderSuggestLine();
+  renderSuggest(sugRes);
+}
+function scheduleSuggest(throttle) {
+  if (!throttle || !sugRes) { runSuggest(); return; }
+  if (sugTimer) return; // a trailing run is queued; it reads the latest values
+  const wait = SUGGEST_EVERY - (Date.now() - sugLast);
+  if (wait <= 0) runSuggest(); else sugTimer = setTimeout(runSuggest, wait);
+}
+
+// "Ways to use your head start" only with real room to spare.
+function headStart(sg) {
+  if (sg.status !== "met") return false;
+  if (sg.progress.metric === "fiAge") return sg.margin >= 1;
+  return sg.margin >= 0.01 * Math.max(1, sg.progress.need);
+}
+function renderSuggest(sg) {
+  $("sug-t").textContent = sg.status === "met" ? (headStart(sg) ? "Ways to use your head start" : "You're on track") : "Ways to reach your goal";
+  $("sug-sum").textContent = UI.suggestSummary(sg);
+  if (!$("d-suggest").open) return; // drawn when opened
+  renderSuggestBody(sg);
+}
+
+function renderSuggestBody(sg) {
+  if (!sg) return;
+  const v = sg.inputs, G = sg.goal, R = v.retAge;
+  // The goal control.
+  const typ = G.type;
+  for (const [id, t] of [["goal-retire", "retire"], ["goal-coast", "coast"], ["goal-early", "early"]]) $(id).setAttribute("aria-pressed", typ === t ? "true" : "false");
+  $("goal-retire-s").textContent = `by ${R}`;
+  $("goal-coast-s").textContent = typ === "coast" ? `by ${G.X}` : "by an age";
+  const explicit = v.goal === 2 || v.goal === 3;
+  $("goal-fields").hidden = !explicit;
+  const gf = $("f-goalAge").closest(".field");
+  gf.querySelector("label").textContent = v.goal === 3 ? "Financially independent by age" : "Coast by age";
+  $("h-goalAge").textContent = v.goal === 3 ? "Saving at full pace and never coasting, the age to reach your FIRE number by."
+    : `${v.two ? "Both of you stop" : "You stop"} saving at this age and still reach your FIRE number by ${R}.`;
+  $("goal-chips").hidden = typ !== "early";
+  const fw = sg.fi ? sg.fi.wholeAge : null;
+  for (const b of $("goal-chips").querySelectorAll("button")) b.disabled = fw === null || fw - +b.dataset.sooner <= v.age;
+  const notes = [];
+  if (v.goal === 3) notes.push(`The age is when you'd like to be financially independent: saving at full pace, your investments cover your spending from then on.`);
+  if (G.inferred) notes.push(typ === "coast" ? `Picked from your plan: ${v.two ? "both of you coast" : "you coast"} at ${G.X}.` : "Picked from your plan.");
+  if (G.coerced === "xIsR") notes.push("Coasting at your retirement age is the same as retiring.");
+  $("goal-note").textContent = notes.join(" ");
+  $("goal-note").hidden = !notes.length;
+  $("sug-scn").hidden = sg.scenario !== "buy";
+  if (sg.scenario === "buy") $("sug-scn").textContent = `Assuming you buy at ${sg.buyAge} (Buying a home is on).`;
+
+  // Where things stand.
+  $("sug-status").textContent = UI.statusText(sg);
+  const P = sg.progress;
+  const meter = $("sug-meter");
+  meter.hidden = !P;
+  $("sug-prog").hidden = !P;
+  if (P) {
+    const scale = Math.max(1, P.pct);
+    $("sug-fill").style.width = (Math.max(0, Math.min(1, P.pct / scale)) * 100).toFixed(1) + "%";
+    $("sug-mark").style.left = (1 / scale * 100).toFixed(1) + "%";
+    meter.classList.toggle("met", sg.status === "met" || sg.status === "fiNow");
+    const pt = UI.progressText(sg);
+    $("sug-prog").textContent = pt;
+    meter.setAttribute("aria-label", `Progress to the goal: ${pt}`);
+  }
+
+  // The cards.
+  const lead = sg.status === "met" ? "Biggest opportunity" : "Smallest change";
+  $("sug-cushion").hidden = !(sg.status === "met" && sg.list.length);
+  $("sug-list").innerHTML = sg.list.map((s, i) => {
+    const t = UI.cardText(s, sg);
+    const chips = t.chips.map((c) => `<span class="chip ${c.tone}">${TONE_ICON[c.tone] ? ICON[TONE_ICON[c.tone]] : ""}${esc(c.word)}</span>`).join("");
+    const size = t.sizeLabel ? `<span class="size-pill">${esc(t.sizeLabel)}</span>` : "";
+    const lines = t.split.map((l) => `<li>${esc(l)}</li>`).join("");
+    const split = !t.split.length ? "" : t.split.length > 2
+      ? `<details class="sug-more"><summary>${s.steps.length ? `Split across ${s.steps.length} accounts` : "Details"}</summary><ul class="sug-split">${lines}</ul></details>`
+      : `<ul class="sug-split">${lines}</ul>`;
+    const extra = [t.note, t.side].filter(Boolean).map((x) => `<p class="fine">${esc(x)}</p>`).join("") +
+      (t.why ? `<details class="sug-more"><summary>Why this order</summary><p class="fine">${esc(t.why.replace(/^Why this order: /, ""))}</p></details>` : "");
+    const can = s.feasible && s.set;
+    const rows = [];
+    if (split) rows.push(["How", split]);
+    rows.push(["Effect", `<span class="sug-effect">${ICON.up}${esc(t.effect)}</span>`]);
+    if (chips || size) rows.push([s.kind === "opportunity" ? "Note" : "Watch for", `<span class="sug-chips">${size}${chips}</span>`]);
+    return `<li class="sug-card${i === 0 ? " lead" : ""}">
+      <p class="sug-kicker">${i === 0 ? lead : "Or"}</p>
+      <h4 class="sug-title">${esc(t.title)}</h4>
+      ${t.detail ? `<p class="sug-detail">${esc(t.detail)}</p>` : ""}
+      <dl class="sug-dl">${rows.map(([k, val]) => `<dt>${k}</dt><dd>${val}</dd>`).join("")}</dl>
+      ${extra}
+      ${can ? `<button type="button" class="btn ghost sm sug-apply" data-act="sug" data-sug="${i}" aria-label="Apply: ${esc(t.title)}">Apply</button>` : ""}
+    </li>`;
+  }).join("");
+  if (!sg.list.length) {
+    $("sug-list").innerHTML = sg.status === "fiNow" ? `<li class="sug-empty">Nothing to change: you already have your FIRE number.</li>`
+      : sg.status === "badAges" ? `<li class="sug-empty">Set a retirement age after your current age.</li>`
+      : sg.status === "met" ? `<li class="sug-empty">On track, just barely: no single change leaves room to spare.</li>`
+      : `<li class="sug-empty">No single change gets there on its own.</li>`;
+  }
+  const rej = UI.rejectedText(sg);
+  $("sug-rejected").textContent = rej;
+  $("sug-rejected").hidden = !rej;
+  const sens = UI.sensitivityText(sg);
+  $("sug-sens").textContent = sens;
+  $("sug-sens").hidden = !sens;
+  $("sug-dis").textContent = UI.DISCLAIMER;
+}
+
+function applySuggestion(btn, s) {
+  if (!s || !s.set || !s.feasible) return;
+  const before = { ...values }, msg = UI.appliedText(s, sugRes);
+  revealFields(btn, Object.keys(s.set));
+  Object.assign(values, s.set);
+  showAll();
+  userChanged();
+  $("sug-status").focus({ preventScroll: true }); // the Apply button was redrawn
+  const now = sugRes && sugRes.status === "met" ? " Now on track." : "";
+  toast(`${msg}${now} `, toastButton("Undo", () => { values = before; showAll(); update(); toast("Back to your previous plan."); }));
+}
+
+// The goal control: written through the normal inputs, so storage, the link and Reset follow.
+function setGoal(type) {
+  const g = sugRes ? sugRes.goal : CF.goalOf(CF.sanitize(values).values);
+  const lo = values.age + 1, hi = values.retAge - 1;
+  if (type === "retire") values.goal = 1;
+  else if (type === "coast") {
+    let X = g.type === "coast" ? g.X : values.goal === 2 ? values.goalAge : values.goalAge;
+    if (!(X >= lo && X <= hi)) X = Math.round((values.age + values.retAge) / 2);
+    values.goal = 2; values.goalAge = Math.max(lo, Math.min(hi, X));
+  } else {
+    // A visibly early target: a year before today's FI age, and never after the retirement age.
+    const fi = sugRes && sugRes.fi ? (sugRes.fi.wholeAge !== null ? sugRes.fi.wholeAge : sugRes.fi.top) : values.retAge;
+    values.goal = 3; values.goalAge = Math.max(lo, Math.min(values.retAge, fi - 1));
+  }
+  showAll();
+  userChanged();
+}
+$("goal-retire").addEventListener("click", () => setGoal("retire"));
+$("goal-coast").addEventListener("click", () => setGoal("coast"));
+$("goal-early").addEventListener("click", () => setGoal("early"));
+$("goal-chips").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-sooner]");
+  if (!b || b.disabled || !sugRes || !sugRes.fi || sugRes.fi.wholeAge === null) return;
+  values.goal = 3;
+  values.goalAge = Math.max(values.age + 1, sugRes.fi.wholeAge - +b.dataset.sooner);
+  showAll();
+  userChanged();
+});
+$("suggest-go").addEventListener("click", () => {
+  const d = $("d-suggest");
+  d.open = true;
+  d.querySelector(":scope > summary").focus({ preventScroll: true });
+  d.scrollIntoView({ behavior: reduceMotion.matches ? "auto" : "smooth", block: "start" });
+});
 
 // ---------- heatmap: return x withdrawal rate ----------
 
@@ -1682,6 +1862,7 @@ document.addEventListener("toggle", (e) => {
     // Content opens below its summary; nothing is scrolled. Draw what was skipped while closed,
     // right away (the toggle event already runs after the section is open and laid out).
     if (result) { renderContrib(result); renderEarliest(result); renderBridge(result, bridgeRes); renderHeat(result, gridRes); syncInfo(); }
+    if (d.id === "d-suggest" && sugRes) renderSuggestBody(sugRes);
   } else {
     // Closing a long section can leave its summary above the screen: bring it back, no further.
     const sum = d.querySelector(":scope > summary");
@@ -1745,7 +1926,10 @@ function update() {
   gridRes = CF.grid(values);
   bridgeRes = CF.bridge(values, result);
   houseRes = CF.house(values, result);
+  const throttle = sliderMoving;
+  if (!throttle || !sugRes) { clearTimeout(sugTimer); sugTimer = 0; sugLast = Date.now(); sugRes = CF.suggest(values); }
   renderHero(result);
+  if (throttle) scheduleSuggest(true); else renderSuggest(sugRes);
   renderInputs(result);
   renderHouse(result, houseRes);
   drawAllCharts();
@@ -1802,6 +1986,7 @@ document.addEventListener("click", (e) => {
     return;
   }
   const act = t.dataset.act;
+  if (act === "sug") { applySuggestion(t, sugRes && sugRes.list[+t.dataset.sug]); return; }
   revealFields(t, [{ basis: "basis", size72: "sepShare", try55: "retAge", buyAt: "buyAge" }[act]].filter(Boolean));
   const before = { ...values };
   const undo = () => toastButton("Undo", () => { values = before; showAll(); update(); toast(); });

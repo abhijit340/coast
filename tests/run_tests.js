@@ -51,6 +51,8 @@ const TABLE = {
   houseOn: 0, buyAge: 45, price: 418000, downPct: 10, downFrom: 1, mortRate: 7.4, term: 30,
   pmi: 0.6, closePct: 3, sellPct: 6, propTax: 0.9, insure: 1600, maint: 1, apprec: 0.5,
   rent: 1530, rentGrowth: 0,
+  // suggestions (SPEC 12): goal picked from the plan, no taxable saving
+  goal: 0, goalAge: 55, taxSave: 0,
 };
 check("defaults equal the cited table (SPEC 8, 11.9)", J(CF.DEFAULTS) === J(TABLE), J(CF.DEFAULTS));
 check("defaults are frozen", Object.isFrozen(CF.DEFAULTS));
@@ -480,9 +482,7 @@ check("nice rounding", CF.niceRound(1234567, 1000) === 1250000 && CF.niceRound(4
 
   const d = CF.project({});
   const kr = (x) => CF.fmtCompact(Math.round(x / 1000) * 1000);
-  check("nudge line (defaults): save more, retire at 75, or spend less",
-    UI.nudgeLine(d) === `To get there by 65: save ~${kr(d.requiredAnnual)}/yr, retire at 75, or spend ~${kr(d.spendWithin)}/yr.`, UI.nudgeLine(d));
-  check("nudge line reads aloud without the tilde", !UI.spoken(UI.nudgeLine(d)).includes("~") && UI.spoken("~x") === "about x");
+  check("spoken() reads the tilde as about", UI.spoken("save ~$20K") === "save about $20K" && UI.nudgeLine === undefined);
   check("numbers row (defaults): FIRE, coast today, shortfall at 65",
     UI.kpiSummary(d) === `FIRE $1.78M · coast today ${CF.fmtCompact(d.coastNow, 2)} · ${CF.fmtCompact(-d.surplus, 2)} short at 65`, UI.kpiSummary(d));
   const rich = CF.project({ assets: 500000 });
@@ -719,7 +719,7 @@ check("nice rounding", CF.niceRound(1234567, 1000) === 1250000 && CF.niceRound(4
   // Hash: the sixteen new keys round-trip; an old link opens with the house off.
   const HK = ["houseOn", "buyAge", "price", "downPct", "downFrom", "mortRate", "term", "pmi", "closePct", "sellPct", "propTax",
     "insure", "maint", "apprec", "rent", "rentGrowth"];
-  check("hash: sixteen new keys, all with short names", HK.every((k) => CF.KEYS.includes(k) && CF.HASH_KEYS[k]) && CF.KEYS.length === 47);
+  check("hash: sixteen new keys, all with short names", HK.every((k) => CF.KEYS.includes(k) && CF.HASH_KEYS[k]) && CF.KEYS.length === 50);
   const HV = { ...CF.DEFAULTS, houseOn: 1, buyAge: 50, price: 650000, downPct: 25, downFrom: 0, mortRate: 6.85, term: 15, pmi: 0.4,
     closePct: 2.5, sellPct: 5.5, propTax: 1.25, insure: 2400, maint: 1.5, apprec: -0.5, rent: 2650, rentGrowth: 0.3 };
   check("hash round-trips the house fields", J(CF.decodeHash("#" + CF.encodeHash(HV))) === J(HV));
@@ -743,6 +743,351 @@ check("nice rounding", CF.niceRound(1234567, 1000) === 1250000 && CF.niceRound(4
   check("breakeven row: ahead either way", UI.breakevenSummary(AH) === "buying ahead at any growth · buying ahead at any rate", UI.breakevenSummary(AH));
 }
 
+// ---------- suggestions: ways to reach a goal (SPEC 12) ----------
+{
+  const SG = (o) => CF.suggest(o);
+  const by = (sg, id, who) => sg.list.concat(sg.rejected).find((s) => s.id === id && (who === undefined || s.who === who));
+  const ctxOf = (sg) => ({ scenario: sg.scenario });
+  const tolOf = (sg) => (sg.goal.type === "early" ? 0 : 1e-6 * Math.max(1, sg.progress.need));
+  // Whether a patch meets the suggestion's goal (sanitized first, as the page does), judged as Apply would leave it.
+  const meetsAfter = (sg, set, G) => {
+    const v2 = CF.sanitize({ ...sg.inputs, ...set }).values;
+    return CF.margin(v2, G || CF.goalOf(v2), ctxOf(sg)) >= -tolOf(sg);
+  };
+  const meetsG = (sg, set, G) => CF.margin(CF.sanitize({ ...sg.inputs, ...set }).values, G || sg.goal, ctxOf(sg)) >= -tolOf(sg);
+
+  // Inputs: three new fields, cleaned, hashed and reset like every other.
+  check("goal inputs: defaults goal 0, goalAge 55, taxSave 0, short hash names go / gx / o",
+    CF.DEFAULTS.goal === 0 && CF.DEFAULTS.goalAge === 55 && CF.DEFAULTS.taxSave === 0 &&
+    CF.HASH_KEYS.goal === "go" && CF.HASH_KEYS.goalAge === "gx" && CF.HASH_KEYS.taxSave === "o");
+  const GV = { ...CF.DEFAULTS, goal: 3, goalAge: 61, taxSave: 2500 };
+  check("goal inputs: hash round-trips go, gx and o", J(CF.decodeHash("#" + CF.encodeHash(GV))) === J(GV) &&
+    J(CF.decodeHash("#go=2&gx=50&o=1200")) === J({ goal: 2, goalAge: 50, taxSave: 1200 }));
+  check("goal choice: 2 stays 2, 7 and junk clean to 0", CF.sanitize({ goal: 2 }).values.goal === 2 &&
+    CF.sanitize({ goal: 7 }).values.goal === 0 && CF.sanitize({ goal: "x" }).values.goal === 0 && CF.decodeHash("#go=9").goal === 0);
+  check("term choice unchanged: 15 stays, 30 stays, junk is 30", CF.sanitize({ term: 15 }).values.term === 15 &&
+    CF.sanitize({ term: 30 }).values.term === 30 && CF.sanitize({ term: 7 }).values.term === 30);
+  check("reset clears the new inputs (the defaults have them at 0 / 55 / 0)",
+    J(CF.sanitize({}).values).includes('"goal":0,"goalAge":55,"taxSave":0'));
+  // Taxable saving: 2,000 a year split 1,000 / 1,000; A coasts at 45 keeping nothing, so A's half stops.
+  eq("taxable saving adds to the projection: 380,000 + 10 x 2,000", CF.project({ ...H0, taxSave: 2000 }).balanceAtRet, 400000);
+  eq("taxable saving follows each partner's coast plan (A's half stops at 45)",
+    CF.project({ ...H0, taxSave: 2000, coastOnA: 1 }).balanceAtRet, 280000 + 10 * 1000 + 5 * 1000);
+  eq("taxable saving, one person: all of it follows A", CF.project({ ...H0, two: 0, taxSave: 2000, coastOnA: 1, afterA: 50 }).balanceAtRet,
+    100000 + 5 * 24000 + 5 * (10000 + 1000 + 1000));
+  check("taxable saving: a component of contributions", near(CF.contribAt(CF.sanitize({ ...H0, taxSave: 2000 }).values,
+    CF.planOf(CF.sanitize(H0).values), 40).taxable, 2000));
+
+  // The goal.
+  const g = (o) => CF.goalOf(CF.sanitize(o).values);
+  check("goal 0: retire by R when nobody coasts", J(g(H0)) === J({ type: "retire", X: null, T: null, inferred: true }));
+  check("goal 0: coast by X when every partner coasts at the same age", g({ ...H0, coastOnA: 1, coastOnB: 1 }).type === "coast" &&
+    g({ ...H0, coastOnA: 1, coastOnB: 1 }).X === 45 && g({ ...H0, coastOnA: 1, coastOnB: 1 }).inferred);
+  check("goal 0: different coast ages judge the plan as entered (retire)", g({ ...H0, coastOnA: 1 }).type === "retire" &&
+    g({ ...H0, coastOnA: 1, coastOnB: 1, coastAgeB: 47 }).type === "retire");
+  check("goal 2: coast by X, clamped to today; X at R becomes retire (xIsR)",
+    g({ ...H0, goal: 2, goalAge: 44 }).X === 44 && g({ ...H0, goal: 2, goalAge: 30 }).X === 40 &&
+    g({ ...H0, goal: 2, goalAge: 50 }).type === "retire" && g({ ...H0, goal: 2, goalAge: 60 }).coerced === "xIsR");
+  check("goal 3: FI by T", g({ ...H0, goal: 3, goalAge: 48 }).type === "early" && g({ ...H0, goal: 3, goalAge: 48 }).T === 48);
+
+  // Search helpers.
+  check("bisect up: the smallest multiple of the step that passes, from a low guess", CF.bisect((x) => x >= 1234, 100, 200, { step: 100, cap: 1e6 }) === 1300 &&
+    CF.bisect((x) => x >= 5e7, 100, 100, { step: 100, cap: 1e6 }) === null);
+  check("bisect down: the largest that passes", CF.bisect((x) => x <= 19050, 0, 70900, { step: 100, dir: "down" }) === 19000 &&
+    CF.bisect((x) => x < 0, 0, 500, { step: 100, dir: "down" }) === null);
+  check("scanAge: first pass going up, last of a run going down", CF.scanAge((a) => a >= 51, 41, 100) === 51 &&
+    CF.scanAge((a) => a >= 48, 49, 41, "last") === 48 && CF.scanAge(() => false, 41, 60) === null);
+
+  // allocate / unallocate: the waterfall (HSA, Roth IRAs, 401(k)s, taxable), even splits, limits respected.
+  const HV0 = CF.sanitize(H0).values;
+  const A12 = CF.allocate(HV0, 12000);
+  // HSA 2,000 -> 8,750 (+6,750); 5,250 left for Roth: B gets 2,600, A 2,650 > A's room 2,500, so A 2,500 and B 2,750.
+  check("allocate 12,000: HSA to 8,750, then Roth A to 7,500 and Roth B to 2,750",
+    J(A12.set) === J({ hsa: 8750, rothA: 7500, rothB: 2750 }) && A12.left === 0, J(A12.set));
+  const A40 = CF.allocate(HV0, 40000);
+  // 6,750 HSA + 2,500 + 7,500 Roth = 16,750; 23,250 to 401(k)s. A's pay room: 100,000 - 20,000 - 2,500 = 77,500;
+  // B's: 50,000 - 6,000 - 7,500 = 36,500. Even split: B 11,600, A 11,650 (room 14,500 and 19,500).
+  check("allocate 40,000: then 401(k)s split evenly (A 21,650, B 16,600)", J(A40.set) === J({ hsa: 8750, rothA: 7500, rothB: 7500, kA: 21650, kB: 16600 }), J(A40.set));
+  const AHuge = CF.allocate(HV0, 200000);
+  check("allocate: a huge amount ends in taxable, every field within its limit",
+    AHuge.set.taxSave > 0 && AHuge.set.kA === 24500 && AHuge.set.kB === 24500 && AHuge.set.rothA === 7500 &&
+    AHuge.set.hsa === 8750 && Object.keys(AHuge.set).every((k) => AHuge.set[k] <= CF.FIELDS[k].max), J(AHuge.set));
+  check("allocate never changes employer money", Object.keys(AHuge.set).every((k) => !k.startsWith("emp")));
+  check("allocate, one person: never touches B", Object.keys(CF.allocate(CF.sanitize({ ...H0, two: 0 }).values, 50000).set).every((k) => !k.endsWith("B")));
+  check("allocate, self-only HSA with two people: up to 8,800 (4,400 each)",
+    CF.allocate(CF.sanitize({ ...H0, hsaFamily: 0 }).values, 7000).set.hsa === 8800);
+  check("allocate skips an HSA not in use, and Roth for a partner with no salary",
+    CF.allocate(CF.sanitize({ ...H0, hsa: 0, salB: 0 }).values, 1000).set.rothA === 6000 &&
+    CF.allocate(CF.sanitize({ ...H0, hsa: 0, salB: 0 }).values, 1000).set.hsa === undefined);
+  check("allocate: a partner's room stops at their own salary (B 10,000 pay, 6,000 saved -> Roth +4,000)",
+    CF.allocate(CF.sanitize({ ...H0, hsa: 0, salB: 10000, kB: 5000, empB: 10, rothA: 7500 }).values, 6000).set.rothB === 4000);
+  const U8 = CF.unallocate(HV0, 8000);
+  check("unallocate 8,000: 401(k)s first (no taxable), evenly: kA 6,000, kB 1,000", J(U8.set) === J({ kA: 6000, kB: 1000 }), J(U8.set));
+
+  // Retire by 50, FIRE 400,000 (SPEC 9 fixture: 380,000 at 50).
+  const R4 = SG(H0);
+  const sv = by(R4, "save"), sp = by(R4, "spend"), rl = by(R4, "retLater");
+  check("retire 400,000: short by 20,000", R4.status === "short" && near(R4.margin, -20000));
+  check("retire 400,000: save 2,000 more, all to the HSA (2,000 -> 4,000), one part",
+    sv.change.delta === 2000 && J(sv.set) === J({ hsa: 4000 }) && sv.parts === 1 && sv.feasible, J(sv.set));
+  check("retire 400,000: save is minimal (1,900 more falls short)", meetsG(R4, sv.set) && !meetsG(R4, CF.allocate(R4.inputs, 1900).set));
+  check("retire 400,000: spend 19,000 (= 380,000 x 5%), and 19,100 falls short",
+    sp.change.to === 19000 && meetsG(R4, { spend: 19000 }) && !meetsG(R4, { spend: 19100 }));
+  check("retire 400,000: retire at 51, the same as project().retireLater", rl.change.to === 51 && T1.retireLater === 51);
+  check("retire 400,000: ranked by effort (save 2,000 / 150,000 pay first)", R4.best.id === "save" && near(sv.effort, 2000 / 150000, 1e-12) &&
+    R4.list.every((s, i) => i === 0 || s.kind === "combo" || s.effort >= R4.list[i - 1].effort - 1e-12));
+
+  // FIRE 500,000: the waterfall written out above.
+  const R5 = SG({ ...H0, spend: 25000 });
+  check("retire 500,000: save 12,000 more through the waterfall", by(R5, "save").change.delta === 12000 &&
+    J(by(R5, "save").set) === J({ hsa: 8750, rothA: 7500, rothB: 2750 }), J(by(R5, "save").set));
+  check("retire 500,000: flags the limits reached and the Roth income note",
+    by(R5, "save").flags.filter((f) => f.code === "atLimit").map((f) => f.key).join() === "hsa,rothA" &&
+    by(R5, "save").flags.some((f) => f.code === "rothIncome") && by(R5, "save").flags.some((f) => f.code === "hsaEligibility"));
+
+  // Coast by 45, FIRE 340,000: both coasting at 45 reach 240,000; extra saving counts only before 45.
+  const C45 = SG({ ...H0, spend: 17000, goal: 2, goalAge: 45 });
+  check("coast by 45: 240,000 of 340,000", C45.status === "short" && near(C45.progress.have, 240000) && near(C45.progress.need, 340000));
+  check("coast by 45: save 100,000 / 5 years = 20,000 more", by(C45, "save").change.delta === 20000 && meetsG(C45, by(C45, "save").set) &&
+    !meetsG(C45, CF.allocate(C45.inputs, 19900).set));
+  check("coast by 45: the save patch also turns both coast switches on at 45",
+    by(C45, "save").set.coastOnA === 1 && by(C45, "save").set.coastAgeA === 45 && by(C45, "save").set.coastOnB === 1 && by(C45, "save").set.coastAgeB === 45 &&
+    by(C45, "save").parts === 5);
+  check("coast by 45: keep saving to 49 together (= earliestCoast both)", by(C45, "coastBoth").change.to === 49 && S1.earliest.both.age === 49 &&
+    by(C45, "coastBoth").set.goalAge === 49);
+  check("coast by 45: A alone to 50 with B held at 45 (SPEC 4.4), switching the goal to retire",
+    by(C45, "coastA").change.to === 50 && S2.earliest.A.age === 50 && by(C45, "coastA").set.goal === 1 && by(C45, "coastA").set.coastAgeB === 45);
+  check("coast by 45: only the better single-partner lever is listed", C45.list.filter((s) => s.id === "coastA" || s.id === "coastB").length <= 1);
+  const C40 = SG({ ...H0, spend: 17000, goal: 2, goalAge: 40 });
+  check("coast at today's age: saving more has no years (noYearsLeft); spend (5,000, under the $10K floor) and retiring later are still solved",
+    by(C40, "save").feasible === false && by(C40, "save").reason === "noYearsLeft" &&
+    !by(C40, "spend").feasible && by(C40, "spend").reason === "belowFloor" && by(C40, "spend").change.to === 5000 && by(C40, "retLater") !== undefined);
+
+  // Barista draw: A coasts at 45 drawing 4,000. Balances: 260,000 with the draw, 280,000 without.
+  // FIRE 270,000 (13,500 at 5%): 280,000 - 5 x D >= 270,000 -> D <= 2,000.
+  const DR = SG({ ...H0, spend: 13500, coastOnA: 1, draw: 4000 });
+  check("draw: drawLess solved to 2,000 and minimal (2,500 falls short)", by(DR, "drawLess").change.to === 2000 &&
+    meetsG(DR, { draw: 2000 }) && !meetsG(DR, { draw: 2500 }));
+  check("draw: no draw lever without a coast age", by(SG({ ...H0, draw: 4000 }), "drawLess") === undefined);
+
+  // On track, FIRE 300,000: the opportunities, each the largest change that still meets it.
+  const OT = SG({ ...H0, spend: 15000 });
+  const op = (id, who) => OT.list.find((s) => s.id === id && (who === undefined || s.who === who));
+  check("on track: status met, opportunities only", OT.status === "met" && OT.list.every((s) => s.kind === "opportunity"));
+  check("on track: spend up to 19,000, and 19,100 fails", op("spendMore").change.to === 19000 && meetsG(OT, { spend: 19000 }) && !meetsG(OT, { spend: 19100 }));
+  check("on track: save 8,000 less (401(k)s first, employer untouched), and 8,100 fails",
+    op("saveLess").change.delta === -8000 && J(op("saveLess").set) === J({ kA: 6000, kB: 1000 }) && !meetsG(OT, CF.unallocate(OT.inputs, 8100).set));
+  check("on track: retire at 48, and 47 fails", op("retireSooner").change.to === 48 && !meetsG(OT, { retAge: 47 }));
+  check("on track: coast sooner together = earliestCoast (48)",
+    op("coastSooner", "both").change.to === 48 && CF.earliestCoast(OT.inputs, "both", 300000, 0).age === 48);
+  check("on track: ranked by benefit, largest first", OT.list.every((s, i) => i === 0 || s.benefit <= OT.list[i - 1].benefit));
+
+  // FI by a target age.
+  const E49 = SG({ ...H0, goal: 3, goalAge: 49 });
+  const es = by(E49, "save");
+  check("early: FI at 51 now, the goal is 49", E49.status === "short" && E49.progress.fiAge === 51 && E49.margin === -2);
+  check("early: save makes the FI age 49, and 100 less does not",
+    CF.neverCoastAge(CF.sanitize({ ...H0, ...es.set }).values, 400000, 0).wholeAge <= 49 &&
+    CF.neverCoastAge(CF.sanitize({ ...H0, ...CF.allocate(E49.inputs, es.change.delta - 100).set }).values, 400000, 0).wholeAge > 49);
+  check("early: no retire-later or coast levers", !by(E49, "retLater") && !by(E49, "coastBoth"));
+  const EFI = SG({ ...H0, assets: 500000, goal: 3, goalAge: 45 });
+  check("early: already FI today -> fiNow, empty list", EFI.status === "fiNow" && EFI.list.length === 0);
+  const ENV = SG({ ...NONE, goal: 3, goalAge: 60 });
+  check("early: never FI -> the levers still aim at the goal age (spend 5,000 is under the floor, so not offered)", ENV.status === "short" && ENV.progress.fiAge === null &&
+    by(ENV, "spend").reason === "belowFloor" && CF.neverCoastAge(CF.sanitize({ ...NONE, spend: by(ENV, "spend").change.to }).values,
+      by(ENV, "spend").change.to / 0.05, 0).wholeAge <= 60);
+
+  // Bad ages.
+  check("bad ages: badAges and nothing else", SG({ age: 60, retAge: 60 }).status === "badAges" && SG({ age: 60, retAge: 60 }).list.length === 0);
+
+  // The defaults (SPEC 8): $1.01M of $1.78M at 65.
+  const DS = SG({});
+  const dsave = by(DS, "save");
+  check("defaults: save 19,700 more = ceil to $100 of 42,452 - 22,784", dsave.change.delta === 19700 &&
+    dsave.change.delta === Math.ceil((D.requiredAnnual - D.start.total) / 100) * 100);
+  check("defaults: the split is HSA +7,350, Roth +4,300 each, 401(k) +1,900 / +1,850",
+    J(dsave.set) === J({ hsa: 8750, rothA: 7500, rothB: 7500, kA: 6700, kB: 6650 }), J(dsave.set));
+  check("defaults: spend 40,300 and retire at 75 (= the never-coast tile)", by(DS, "spend").change.to === 40300 &&
+    by(DS, "retLater").change.to === 75 && D.neverCoast.wholeAge === 75);
+  check("defaults: needs about 7.0% withdrawal or an 11.1% return (information only)",
+    near(DS.sensitivity.needSwr, 7.03, 0.01) && near(DS.sensitivity.needReturn, 11.1, 0.1), J(DS.sensitivity));
+  check("defaults: the margin at the needed return is within $1 of zero",
+    Math.abs(CF.margin(CF.sanitize({ nominal: DS.sensitivity.needReturn }).values, DS.goal, { scenario: "rent" })) <= 1);
+  check("defaults: needed withdrawal rate = spend / balance", near(DS.sensitivity.needSwr, 71000 / DS.progress.have * 100, 1e-9));
+
+  // Ranking and the combo.
+  check("ranking: at most 6, every card (the combo too) sorted by effort",
+    DS.list.length <= 6 && DS.list.every((s, i, a) => i === 0 || s.effort >= a[i - 1].effort - 1e-12));
+  const combo = DS.list.find((s) => s.kind === "combo");
+  check("ranking: a combo that scores lower than every single step comes first and is the best (defaults: 0.118 against 0.157)",
+    DS.list[0] === combo && DS.best === combo && near(combo.effort, 0.118, 0.001) && near(dsave.effort, 0.157, 0.001));
+  // Combo labels: both parts' flags, once each; the partial save's own limits (Roth stops at 6,950 / 6,900, under 7,500).
+  const cflags = combo.flags.map((f) => f.code + (f.key ? ":" + f.key : ""));
+  check("combo: carries the partial save's labels (HSA, Roth income, match), no duplicates",
+    ["hsaEligibility", "rothIncome", "matchNote"].every((c) => cflags.includes(c)) && new Set(cflags).size === cflags.length, cflags.join());
+  check("combo: the first part's limits come from its own steps (Roth A 6,950 is not at the limit; the HSA is)",
+    combo.pair[0].steps.find((x) => x.key === "rothA").to === 6950 &&
+    !combo.pair[0].flags.some((f) => f.code === "atLimit" && f.key === "rothA") && combo.pair[0].flags.some((f) => f.code === "atLimit" && f.key === "hsa"));
+  check("combo: offered when the best single step is above 0.15, scores below it, and its merged patch meets the goal",
+    dsave.effort > CF.COMBO_TAU && combo && combo.effort < dsave.effort && combo.pair.length === 2 && meetsG(DS, combo.set, combo.goal2));
+  check("combo: none when a small single step exists", !R4.list.some((s) => s.kind === "combo"));
+
+  // Buying a home: house levers only when it is on; the buying plan is judged.
+  check("house off: no house levers", !DS.list.concat(DS.rejected).some((s) => ["price", "buyLater", "down", "noBuy"].includes(s.id)) && DS.scenario === "rent");
+  const HB2 = { ...H0, spend: 17000, houseOn: 1, buyAge: 42, price: 100000, downPct: 20, mortRate: 0, term: 15, pmi: 0, closePct: 0,
+    sellPct: 0, propTax: 0, insure: 0, maint: 0, apprec: 0, rent: 0, rentGrowth: 0 };
+  const HS = SG(HB2);
+  check("house on: the buying plan is judged against the owner's FIRE number", HS.scenario === "buy" && HS.buyAge === 42 &&
+    near(HS.progress.need, CF.house(HB2).fire.own) && near(HS.progress.have, CF.house(HB2).atRet.buyPortfolio) && HS.status === "short");
+  // Typical home figures (SPEC 11.9) with 300,000 invested and 50,000/yr spending: buying at 45 is short.
+  const HS3 = SG({ houseOn: 1, assets: 300000, spend: 50000 });
+  const hp = by(HS3, "price"), hb = by(HS3, "buyLater"), hd = by(HS3, "down");
+  check("house on: a cheaper home meets it and is minimal ($1,000 more does not)", HS3.status === "short" && hp.feasible &&
+    meetsG(HS3, hp.set) && !meetsG(HS3, { price: hp.change.to + 1000 }), J(hp.change));
+  check("house on: buying later meets it and a year earlier does not", hb.feasible && meetsG(HS3, hb.set) && !meetsG(HS3, { buyAge: hb.change.to - 1 }), J(hb.change));
+  check("house on: a bigger down payment is scanned (meets it, or no amount does)", hd.feasible ? meetsG(HS3, hd.set) : hd.reason === "noEffect");
+  const nb = by(HS, "noBuy");
+  check("house on: renting instead shows the renting plan's margin", near(nb.rentMargin, CF.margin(CF.sanitize({ ...HB2, houseOn: 0 }).values, HS.goal, { scenario: "rent" })));
+  check("house on: renting instead is never ranked first while another step works", HS.list[0].id !== "noBuy");
+
+  // Global invariant: every Apply patch, sanitized, comes back unclamped and meets the goal it was solved for.
+  let allOk = true, bad = "";
+  for (const o of [{}, H0, { ...H0, spend: 25000 }, { ...H0, spend: 17000, goal: 2, goalAge: 45 }, { ...H0, spend: 13500, coastOnA: 1, draw: 4000 },
+    { ...H0, spend: 15000 }, { ...H0, goal: 3, goalAge: 49 }, { houseOn: 1 }, HB2, { two: 0 }, { goal: 2, goalAge: 50 }, { assets: 500000 }]) {
+    const sg = SG(o);
+    for (const s of sg.list) {
+      if (!s.set) continue;
+      const v2 = CF.sanitize({ ...sg.inputs, ...s.set }).values;
+      const clamped = Object.keys(s.set).some((k) => v2[k] !== s.set[k]);
+      const okG = CF.margin(v2, s.goal2 || sg.goal, s.id === "noBuy" ? { scenario: "rent" } : ctxOf(sg)) >= -tolOf(sg);
+      const okAfter = s.kind === "opportunity" || s.id === "noBuy" || meetsAfter(sg, s.set);
+      if (clamped || !okG || !okAfter) { allOk = false; bad += `${J(o).slice(0, 40)} ${s.id} ${clamped ? "clamped" : ""} ${okG ? "" : "misses"} ${okAfter ? "" : "missesAfterApply"}; `; }
+    }
+  }
+  check("every Apply patch is unclamped and meets its goal (and the goal as Apply leaves it)", allOk, bad);
+
+  // Buying now with little invested: the cash short at closing is a debt (as house() counts it), never free.
+  const SHORT_IN = { houseOn: 1, buyAge: 42, assets: 20000, spend: 75000, kA: 15000, kB: 15000, rothA: 7000, rothB: 7000 };
+  const SH = SG(SHORT_IN), SHh = CF.house(SHORT_IN);
+  check("cash short at closing: the buying plan's balance has the shortfall taken off as a debt grown to R",
+    SHh.cashShort > 0 && near(SH.progress.have, SHh.atRet.buyPortfolio - SHh.atRet.shortDebt, 1), `${SH.progress.have} vs ${SHh.atRet.buyPortfolio - SHh.atRet.shortDebt}`);
+  check("cash short at closing: no feasible card puts more down", !SH.list.some((s) => s.id === "down" && s.feasible));
+  check("cash short at closing: the margin at 49% down carries its bigger shortfall",
+    CF.margin(CF.sanitize({ ...SHORT_IN, downPct: 49 }).values, SH.goal, { scenario: "buy" }) < 0 &&
+    CF.measure(CF.sanitize({ ...SHORT_IN, downPct: 49 }).values, SH.goal, { scenario: "buy" }).cashShort > SHh.cashShort);
+  const DN = SG({ houseOn: 1, assets: 200000, buyAge: 42, spend: 30000, downPct: 5 });
+  check("a down payment the portfolio can't cover at closing is 'Not on its own' (cashShort)",
+    by(DN, "down").feasible === false && by(DN, "down").reason === "cashShort" && by(DN, "down").cashShort > 0 &&
+    UI.rejectedText(DN).includes("a bigger down payment (more cash at closing than the portfolio holds"), UI.rejectedText(DN));
+  const DOK = SG({ houseOn: 1, assets: 200000, buyAge: 43, spend: 30000, downPct: 5 });
+  check("a down payment the portfolio covers is still offered, its effort spread over the years to R",
+    by(DOK, "down").feasible && near(by(DOK, "down").effort, 418000 * (by(DOK, "down").change.to - 5) / 100 / (23 * 2 * 62608), 1e-9));
+
+  // Coast goal: every card's Apply patch turns both coast switches on at X, so the page judges that same plan.
+  for (const [name, sg] of [["coast by 50", SG({ goal: 2, goalAge: 50, assets: 150000 })], ["coast by 45", C45]]) {
+    const cards = sg.list.filter((s) => s.set);
+    // X, or for a one-partner coast card that partner's own later age (the other held at X).
+    const X = (s, p) => { const g2 = s.goal2 || sg.goal; return g2.ages && g2.ages[p] !== undefined ? g2.ages[p] : g2.X !== null ? g2.X : sg.goal.X; };
+    check(`${name}: every card's patch sets coastOnA/B = 1 at its X`, cards.length > 0 && cards.every((s) =>
+      s.set.coastOnA === 1 && s.set.coastOnB === 1 && s.set.coastAgeA === X(s, "A") && s.set.coastAgeB === X(s, "B")), cards.map((s) => s.id + J(s.set)).join("; "));
+    check(`${name}: after Apply, the plan as entered (retire by R, the hero's figure) meets it too`, cards.every((s) =>
+      CF.margin(CF.sanitize({ ...sg.inputs, ...s.set }).values, { type: "retire" }, ctxOf(sg)) >= -tolOf(sg)),
+      cards.map((s) => s.id + " " + Math.round(CF.margin(CF.sanitize({ ...sg.inputs, ...s.set }).values, { type: "retire" }, ctxOf(sg)))).join("; "));
+  }
+  check("coast goal: the spend card says it also sets the coast switches", UI.cardText(by(SG({ goal: 2, goalAge: 50, assets: 150000 }), "spend"),
+    SG({ goal: 2, goalAge: 50, assets: 150000 })).note === "Also sets both of you to coast at 50.");
+
+  // Impossible or implausible: never a card for retiring on almost nothing, after 80, or for a near-free home.
+  const IMP = SG({ age: 70, retAge: 72, assets: 0, salA: 0, salB: 0, spend: 200000 });
+  check("impossible goal: no feasible card at all, spending less is 'Not on its own' (below the floor)",
+    IMP.status === "short" && IMP.list.every((s) => s.kind === "combo") && !IMP.list.some((s) => s.set && s.set.spend !== undefined && s.set.spend < 10000) &&
+    by(IMP, "spend").reason === "belowFloor" && UI.suggestSummary(IMP) === "No single step gets there", J(IMP.list.map((s) => s.id)));
+  const LOWPAY = SG({ two: 0, salA: 30000, kA: 1000, spend: 60000, assets: 0 });
+  check("low pay: spending $10,700 and retiring at 97 are not cards (floor 25% of $60,000; after 80)",
+    by(LOWPAY, "spend").reason === "belowFloor" && by(LOWPAY, "retLater").reason === "tooLate" && by(LOWPAY, "retLater").change.to === 97 &&
+    UI.rejectedText(LOWPAY).includes("retiring later (would take until 97)") && LOWPAY.list.every((s) => s.feasible && (s.set.spend === undefined || s.set.spend >= 15000)));
+  const HON = SG({ houseOn: 1 });
+  check("house on: a home at about 11% of the price and retiring at 88 are not cards, nor in the hero line",
+    by(HON, "price").reason === "belowFloor" && by(HON, "retLater").reason === "tooLate" &&
+    !HON.list.some((s) => s.id === "price" || s.id === "retLater") && !UI.suggestLine(HON).includes("88"), UI.suggestLine(HON));
+  let floorOk = true;
+  for (const o of [{}, { houseOn: 1 }, { goal: 2, goalAge: 55 }, { two: 0, salA: 30000, spend: 60000, assets: 0 }, { houseOn: 1, goal: 2, goalAge: 55 }]) {
+    const sg = SG(o);
+    for (const s of sg.list) {
+      const parts = s.pair || [s];
+      for (const q of parts) {
+        if (q.id === "spend" && q.change.to < Math.max(10000, 0.25 * sg.inputs.spend)) floorOk = false;
+        if (q.id === "retLater" && q.change.to > 80) floorOk = false;
+        if (q.id === "price" && q.change.to < 0.25 * sg.inputs.price) floorOk = false;
+      }
+    }
+  }
+  check("no card (or combo part) spends below the floor, retires after 80 or buys under 25% of the price", floorOk);
+
+  // Words.
+  const RICH = SG({ assets: 600000 });
+  check("on track: the withdrawal rate reads 'as low as' (a lower rate is the cautious one), never 'up to'",
+    UI.sensitivityText(RICH).includes("with a withdrawal rate as low as ") && !UI.sensitivityText(RICH).includes("up to"), UI.sensitivityText(RICH));
+  check("on track: coasting at today's age reads 'could stop saving now'",
+    RICH.list.filter((s) => s.id === "coastSooner" && s.change.to === 42).every((s) => UI.cardText(s, RICH).title === `${s.who} could stop saving now`) &&
+    RICH.list.some((s) => s.id === "coastSooner" && s.change.to === 42));
+  check("on track: the status names the target once ('more than the ... you need')", UI.statusText(RICH).includes("more than the $1.78M you need"), UI.statusText(RICH));
+  check("house on: the status and the hero line name the buying scenario and its own gap",
+    UI.statusText(HON).startsWith("With the home purchase at 45, your plan reaches ") &&
+    /^If you buy at 45, you'd be \$[\d.]+[KM] short\. Closest steps: /.test(UI.suggestLine(HON)) &&
+    UI.statusText(HON).endsWith(UI.suggestLine(HON).match(/be (\$[\d.]+[KM]) short/)[1] + " short."), UI.suggestLine(HON));
+  check("early goal: the status and the cards use the same one-decimal FI age", (() => {
+    const t = UI.statusText(E49), a = +E49.progress.fiFrac.toFixed(1);
+    return t.includes(`FI at about ${a}, `) && t.includes(`${+(a - 49).toFixed(1)} yr`) && UI.effectText(es, E49).includes("at about ");
+  })(), UI.statusText(E49) + " / " + UI.effectText(es, E49));
+  check("combo card subtitle", UI.cardText(combo, DS).detail === "Two smaller changes instead of one big one");
+
+  // Speed: fast enough to rerun on every input change.
+  const t0 = Date.now(); for (let i = 0; i < 5; i++) SG({}); const tOff = (Date.now() - t0) / 5;
+  const t1 = Date.now(); for (let i = 0; i < 5; i++) SG({ houseOn: 1 }); const tOn = (Date.now() - t1) / 5;
+  check(`speed: defaults ${tOff.toFixed(1)} ms (< 30), house on ${tOn.toFixed(1)} ms (< 50)`, tOff < 30 && tOn < 50);
+
+  // ui.js strings.
+  check("summary (defaults): the combo, ranked first", UI.suggestSummary(DS) === "Best: save $14.8K/yr more + retire at 67", UI.suggestSummary(DS));
+  check("summary: a single save names its accounts (5 accounts)", UI.suggestSummary({ ...DS, best: dsave }) === "Best: save $19.7K/yr more (5 accounts)");
+  check("summary: one account is named", UI.suggestSummary(R4) === "Best: save $2K/yr more (HSA)", UI.suggestSummary(R4));
+  check("summary: on track names the best opportunity", UI.suggestSummary(OT).startsWith("On track: could "), UI.suggestSummary(OT));
+  check("summary: already there, and bad ages", UI.suggestSummary(EFI) === "You're already there" && UI.suggestSummary(SG({ age: 60, retAge: 60 })) === "Fix the ages first");
+  check("summary fits a 375px row (under 46 characters)", [DS, R4, OT, C45, E49, HS, SG({ houseOn: 1 })].every((sg) => UI.suggestSummary(sg).length <= 46));
+  check("hero line (defaults): save $19.7K/yr more, retire at 75, or spend $40.3K/yr (rounded like the summary)",
+    UI.suggestLine(DS) === "Closest steps: save $19.7K/yr more, retire at 75, or spend $40.3K/yr.", UI.suggestLine(DS));
+  check("hero line: empty when on track; names the goal otherwise", UI.suggestLine(OT) === "" && UI.suggestLine(C45).startsWith("Closest steps to coast by 45: "));
+  const ct = UI.cardText(dsave, DS);
+  check("save card: title, monthly and share of pay", ct.title === "Save $19,700/yr more" && ct.detail === "$1,642/mo together · 16% of pay", J(ct));
+  check("save card: one line per account, all from → to (as many lines as accounts)",
+    J(ct.split) === J(["HSA $1,400 → $8,750 (family limit)", "Partner A Roth IRA $3,200 → $7,500 (limit)", "Partner B Roth IRA $3,200 → $7,500 (limit)",
+      "Partner A 401(k) $4,800 → $6,700", "Partner B 401(k) $4,800 → $6,650"]) && ct.split.length === dsave.steps.length, J(ct.split));
+  check("save card: effect, chips, match note, why and take-home", ct.effect === "Reaches $1.78M by 65 (now $1.01M)" &&
+    ct.chips.some((c) => c.word === "16% of pay") && ct.chips.some((c) => c.word === "Roth income limits apply") &&
+    ct.note.includes("whole match") && ct.why.startsWith("Why this order") && ct.side === "Take-home about $1,640/mo lower (before tax effects).", J(ct));
+  const cs = UI.cardText(by(DS, "spend"), DS);
+  check("spend card", cs.title === "Plan on $40,300/yr in retirement" && cs.detail === "43% less than your $71,000 plan" &&
+    cs.effect === "Your $1.01M would cover $40,300/yr at your 4.0% withdrawal rate" && cs.chips.some((c) => c.word === "Large cut") &&
+    cs.sizeLabel === "Effort: very big", J(cs));
+  const cr = UI.cardText(by(DS, "retLater"), DS);
+  check("retire-later card", cr.title === "Retire at 75 instead of 65" && cr.detail === "10 more working years", J(cr));
+  check("coast cards", UI.cardText(by(C45, "coastBoth"), C45).title === "Keep saving until 49, not 45" &&
+    UI.cardText(by(C45, "coastA"), C45).title === "Only A keeps saving to 50" && UI.cardText(by(C45, "coastA"), C45).detail === "B still coasts at 45");
+  check("combo card", UI.cardText(combo, DS).title.startsWith("Two smaller steps: "));
+  check("opportunity cards: titles; 'no cushion' is said once above the list, not on each card", UI.cardText(op("spendMore"), OT).title === "Spend up to $19,000/yr (+$4,000)" &&
+    UI.cardText(op("retireSooner"), OT).title === "Retire at 48, 2 yrs sooner" && OT.list.every((s) => !UI.cardText(s, OT).note.includes("no cushion")));
+  check("opportunity effect: spending more is said as coverage, the rest against the same target",
+    UI.effectText(op("spendMore"), OT) === "Your $380K would cover $19,000/yr at your 5.0% withdrawal rate" &&
+    UI.effectText(op("retireSooner"), OT) === "Still reaches your $300K at 48", UI.effectText(op("spendMore"), OT) + " / " + UI.effectText(op("retireSooner"), OT));
+  check("coast sooner: 'could stop saving at 48 instead of 50'", UI.cardText(op("coastSooner", "both"), OT).title === "Both of you could stop saving at 48 instead of 50",
+    UI.cardText(op("coastSooner", "both"), OT).title);
+  check("not-on-its-own line", UI.rejectedText(C40).startsWith("Not on its own: saving more (coasting at 40 leaves no years to save)"), UI.rejectedText(C40));
+  check("sensitivity text (defaults)", UI.sensitivityText(DS) === "For reference, your plan as entered would need an 11.1% return a year before inflation " +
+    "(you assume 7.0%), or a 7.0% withdrawal rate (you assume 4.0%). This shows how sensitive the plan is; it isn't something to plan on.", UI.sensitivityText(DS));
+  check("disclaimer", UI.DISCLAIMER.startsWith("Educational estimates from this model, not financial advice."));
+  check("applied toast text", UI.appliedText(dsave, DS) === "Applied: save $19,700/yr more.");
+}
+
 // ---------- privacy scan: no stray amounts, no spreadsheets ----------
 // Every concrete number must trace back to SPEC.md: cited defaults and their sources,
 // the 2026 limits, the test scenarios above, slider limits, and years.
@@ -763,6 +1108,13 @@ const ALLOWED_NUMBERS = new Set([
   418000, 417500, 1600, 1530, 1531, 1569, 4528, 1798, 2531, 120000, 96000, 24000, 356000, 51200, 44800, 431200, 78000,
   190000, 80000, 5333, 53333, 16000, 76000, 12000, 41800, 12540, 54340, 3588, 2604, 376200, 297000, 297433, 594000,
   594411, 1715273, 900000, 38000, 650000, 2400, 2650,
+  // suggestions (SPEC 12) and their test scenarios. All worked from the section 9 fixture (H0: R4, R5,
+  // C45, DR, OT, E49) or the cited defaults (DS: save 19,700 = 42,452 - 22,784 rounded up; its split
+  // 8,750 / 7,500 / 6,700 / 6,650; the combo's partial Roth 6,950 / 6,900; spend 40,300), never real data.
+  6900, 6950,
+  // the review's scenarios: buying now short of cash (75000 spending), one low income (60000 spending)
+  60000, 75000,
+  1234, 1300, 1850, 1900, 2500, 2600, 2750, 4300, 5250, 6650, 6700, 6750, 7000, 7350, 8100, 11600, 11650, 13500, 14500, 16600, 16750, 19050, 19100, 19500, 19700, 19900, 21650, 23250, 25000, 36500, 40300, 70900, 77500, 150000, 260000, 270000, 280000,
   // years (sources, the seed, the Trinity study)
   1998, 2022, 2023, 2024, 2025, 2026, 20261016,
   // the tests' random-number generator
@@ -776,7 +1128,14 @@ const ALLOWED = new Set([
   "$500,000", "$1,000", "$1,234,567", "$1,500.50", "$61,000", "$40,000", "$20,000", "$100,000",
   "$1.78M", "$1.01M", "$1.5M", "$1M", "$635K", "$45K", "$999K", "$1.2T", "$2.5B", "$100K", "$1,128", "$500K", "$5K", "$10K",
   "$418,000", "$417,500", "$1,530", "$1,531", "$1,600", "$1,569", "$14K",
+  "$1,640", "$1,642", "$1,850", "$1,900", "$14,800", "$19,000", "$19,700", "$19.7K", "$20K", "$2K", "$310,000", "$4,000", "$40,300", "$40.3K",
   "$23K", "$42K", "$40K", "$5,000", "$50,000", "$6,000", "$2,000", "$28,000", "$634,891", "$71000",
+  // suggestions copy: the defaults' combo ($14.8K) and split ($6,700 / $6,650), the on-track fixture ($380K, $300K)
+  "$14.8K", "$6,700", "$6,650", "$380K", "$300K",
+  // the review's implausible-lever scenario (one income, $60,000 spending: spend $10,700 isn't offered)
+  "$60,000", "$10,700",
+  // SPEC 12 examples at the defaults with the home on (house at 45): the gap, its own FIRE number, the floored price
+  "$1.42M", "$1.40M", "$46,000",
 ]);
 let files;
 try {

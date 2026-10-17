@@ -17,7 +17,7 @@ Nothing the user types leaves the device. A test fails on any dollar amount not 
 - Files: `index.html`, `style.css`, `calc.js` (pure math, UMD: `window.CoastFire` / `module.exports`),
   `ui.js` (pure: the summary line of each collapsed section and the saved open/closed state, tested in
   node), `app.js` (DOM, SVG charts, storage), `sw.js` (network-first, cached fallback after 3 s; cache
-  `coast-fire-v7`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
+  `coast-fire-v8`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
   `tests/run_tests.js`, `README.md`, `SPEC.md`.
 - Mobile-first at 375px: one column, max-width 420px, 16px gutters plus safe-area insets, no
   horizontal scroll. At 860px and up: inputs on the left (340–400px), results on the right.
@@ -60,6 +60,9 @@ last good value and marks the field invalid. Retirement age ≤ current age mark
 | | `basis` | Roth contributions (basis) | 0 | 0–500K √ | |
 | | `taxable` | Taxable + cash | 0 | 0–500K √ | |
 | | `lead` | Start conversions early | 0 yrs | 0–5 | whole |
+| Other investing (collapsed row after HSA) | `taxSave` | Other investing (taxable) | 0/yr | 0–50K √ | 0–1e8; hash `o` (section 12.4) |
+| Suggestions (section 12) | `goal` | Your goal: 0 picked from the plan, 1 retire by R, 2 coast by X, 3 as early as possible | 0 | segmented | choice; anything else → 0; hash `go` |
+| | `goalAge` | Coast by age / Financially independent by age (shown for goals 2 and 3) | 55 | 18–85 | 0–120, whole; hash `gx` |
 
 Money slider ends (dollars): assets 2000000, spending 250000, salary 300000.
 
@@ -109,10 +112,15 @@ describes the *same* scenario as the big value:
 | Solved age c < R, plan reaches FIRE | good, check "On track" | c / earliest age you can both stop saving | "Keep adding $C/yr together until c. After that, growth alone takes you to your $F FIRE number by R." (with saving-after-coasting: "then $D/yr after that") |
 | Solved age c < R, plan as entered short | warn "Plan $X short" | c | same + "Your plan as entered (A coasts at 55) ends $X short." |
 | c = R | warn, clock "Not before R" | R / keep saving right up to retirement | |
-| Not possible | bad, alert "$X short" ("$X short saving to R" when a coast age is on, since the tile and bottom bar show the plan as entered) | "Not by R" / saving the whole way isn't enough yet | "Not quite on course yet. At $23K/yr you reach $1.01M by 65, short of $1.78M." + one quiet line "To get there by R: save ~$K/yr, retire at R′, or spend ~$S/yr.", which opens the full list with today's values |
+| Not possible | bad, alert "$X short" ("$X short saving to R" when a coast age is on, since the tile and bottom bar show the plan as entered) | "Not by R" / saving the whole way isn't enough yet | "Not quite on course yet. At $23K/yr you reach $1.01M by 65, short of $1.78M." |
+
+Under the sentence, whenever the suggestions engine (section 12) says the goal is short, one quiet line
+from it, `#suggest-line`: "Closest steps: save ~$20K/yr more, retire at 75, or spend $40.3K/yr." and a
+"See all ways" link that opens "Ways to reach your goal". It replaces the old nudge list, so the same
+steps are never listed twice.
 
 **Calm first screen (progressive disclosure).** Shown by default: masthead (logo, title, share and reset),
-the answer card, and the chart card (title, one-line subtitle, a three-item legend with an "Other lines"
+the answer card, the closed "Ways to reach your goal" row (section 12), and the chart card (title, one-line subtitle, a three-item legend with an "Other lines"
 button for the keys of the other three (always drawn), readout, plot, and a hint "Drag the chart, or use
 the arrow keys, to read any age." shown until the chart is first used; the chart's label always names the
 keys); then
@@ -167,7 +175,8 @@ HSA, family coverage: one account; full until every partner is coasting, then th
 whoever coasted last. On a tie (partners coasting at the same latest age) it is the larger of their
 `after` shares, so partner order never matters (the household keeps funding the shared account at the
 larger rate). Self-only: split evenly, each half follows its partner.
-Total `C(a)` = sum of partners + HSA. Held constant in real terms.
+Taxable saving (`taxSave`): split evenly, each half follows its partner (all of it follows A for one person).
+Total `C(a)` = sum of partners + HSA + taxable. Held constant in real terms.
 
 ### 4.3 Projection (yearly)
 `B_0 = assets`; `B_{k+1} = max(0, B_k (1 + r) + C(age + k) − D(age + k))`, k = 0…n−1, where the
@@ -187,8 +196,8 @@ Closed form for the tests (both coast at c, after = 0, no draw, k = c − age):
   With after = 0 and no draw, `earliest.both == crossAge`; otherwise they can differ and both show.
 - `requiredAnnual = (FIRE − A (1+r)^n) / ((1+r)^n − 1) × r` (r = 0: `(FIRE − A)/n`).
 - `retireLater`: when `earliest.both` is null, the never-coast `wholeAge` (the same full-saving
-  recurrence, so the nudge and the Never coast tile always agree); null when that is null too (the nudge
-  then just says "retire later").
+  recurrence, so the retire-later suggestion and the Never coast tile always agree); null when that is
+  null too.
 - `spendWithin = fullBalance × swr`.
 - `neverCoast = neverCoastAge(v, fire, r, maxAge = 100)` → `{age, wholeAge, yearly, points}`: keep
   saving at full pace and never coast. Every partner keeps their full pre-coast saving (401(k),
@@ -258,7 +267,7 @@ Closed form for the tests (both coast at c, after = 0, no draw, k = c − age):
 |---|---|
 | retAge ≤ age | Field invalid; chip "Check ages"; ring and all four KPI tiles "—" ("Fix the ages first", no good/bad tile colour); chart empty state titled "Your path"; one muted line instead of the solver rows and no sparkline; heatmap and its legend hidden. |
 | r = 0 | Annuity factor = n; no division by zero. |
-| Never coast doesn't reach FIRE by `top` (100, or R / today's age when later) | Tile "Not by {top}"; nudge "retire later" with no age; no crossing dot; the x-axis stays at R. |
+| Never coast doesn't reach FIRE by `top` (100, or R / today's age when later) | Tile "Not by {top}"; the retire-later suggestion says "not even by 100"; no crossing dot; the x-axis stays at R. |
 | r < 0 | Allowed; warning "Your return is below inflation…". |
 | spend = 0 | FIRE 0, coasting now. |
 | Over legal limit | Clamped with the 2026-limit note. HSA re-clamped when coverage or partner count changes. |
@@ -377,6 +386,7 @@ Hand-checked with a 0% real return (nominal = inflation) so every value adds up 
   helpers (tap / sideways / vertical, near-thumb hit test, commit vs revert on lift or cancel, relative drag; `ui.js`); and the privacy scan (no spreadsheets; no dollar amount or 4+ digit number outside the
   allowlist of figures in this file), plus a check that every allowlist entry is written in this
   file or a test scenario.
+- Suggestions: the cases in section 12.7.
 
 ## 10. Out of scope
 
@@ -642,6 +652,237 @@ breakeven rate about 2.2% (2.22 with PMI pro-rated by month). Tests fix the exac
 | PMI | **0.6%**/yr | Freddie Mac: "approximately between $30 and $70 per month for every $100,000 borrowed" = 0.36–0.84%/yr, midpoint 0.6% (https://myhome.freddiemac.com/buying/breaking-down-pmi); same page: automatic termination at a scheduled 78% of original value. |
 | Home price growth | **0.5%**/yr real | Shiller's index: real US home prices about 0.7%/yr over the period homeowners recall, and close to trendless since 1890 (0.1%/yr 1890–1996) (Wikipedia, Case–Shiller index, citing *Irrational Exuberance*, https://en.wikipedia.org/wiki/Case%E2%80%93Shiller_index); 0.5% sits between. |
 | Down payment from | **Invested assets** | The conservative case: the money stops compounding in the portfolio. |
+
+## 12. Suggestions: "Ways to reach your goal"
+
+*"What would it take?"* For a goal, each lever is **solved** for the smallest change that meets it,
+on the same projections as the rest of the page, and the results are ranked. When the plan is
+already on track the same solvers run the other way: how much room there is to spare. Educational
+estimates from this model, not advice: every account earns the same return, and taxes, catch-up
+contributions, income limits and account rules aren't modeled. Math in `calc.js` (`suggest()`,
+pure; measured in node on a desktop: about 3 ms at the defaults, 6–9 ms with the home on and up to
+about 20 ms in the slowest cases (home on with goal 3), several times that on a phone). A typed or
+tapped change reruns it at once; while a slider moves it reruns at most every 150 ms with a trailing
+run for the last value (the rest of the page stays live). Words in `ui.js`.
+
+### 12.1 Goals (inputs `goal`, `goalAge`)
+
+| goal | Means | Judged on |
+|---|---|---|
+| 0 (default) | Picked from the plan: "coast by X" when every partner's coast switch is on at the same age X < R, otherwise "retire by R". The section says "Picked from your plan". | as below |
+| 1 Retire by R | Reach the FIRE number by R with the plan as entered (coast switches included) | the balance at R, the same figure as the "At R, your plan" tile |
+| 2 Coast by X | Everyone stops saving at X = `goalAge` (clamped to today) and still reaches FIRE by R (each keeps their own after-coasting share; the draw starts at X) | the balance at R with both coasting at X (the plan `earliestCoast("both")` uses) |
+| 3 As early as possible | Be FI by T = `goalAge`, saving at full pace and never coasting (the never-coast recurrence, 4.4) | T − the never-coast `wholeAge`, in whole years (never → −∞) |
+
+X ≥ R is the same as retiring (`coerced: "xIsR"`, said in one line). Choosing "As early as
+possible" sets T = max(age + 1, min(R, FI age − 1)), so the target is visibly early and never after
+the retirement age; a goal note says what the age means. Chips "1 / 3 / 5 yrs sooner" set T = FI age − N.
+With **Buying a home** on (and comparable), the buying plan is judged: the buying path against
+`FIRE_own(R)` (or the FI age through the purchase, `fiBuy`, for goal 3), and the section says
+"Assuming you buy at 45 (Buying a home is on)." Cash short at closing counts as a debt grown at r to
+R, `cashShort (1 + r)^(R − b)` (the same as `house().atRet.shortDebt`), so a down payment the
+household doesn't have is never free. The hero, chart and tiles stay on the renting plan (11.5), so
+the two scenarios are named: the hero headline ends "Renting, without the home purchase.", the status
+starts "With the home purchase at 45, your plan reaches …", and the hero line starts "If you buy at
+45, you'd be $X short. Closest steps: …".
+
+**Margin** `margin(v, G, ctx)`: $ for goals 1–2, whole years for goal 3; met when ≥ −tol (tol =
+1e-6 × the target for $, 0 for years). Status: `badAges` (R ≤ age), `fiNow` (already FI today:
+no list), `met`, `short`.
+
+### 12.2 Levers (status short)
+
+Each lever is solved exactly on its step grid (`bisect`: the smallest passing multiple, so the
+solution minus one step fails; `scanAge`: the first whole age that passes).
+
+| id | Applies | Solved for | Step | Effort |
+|---|---|---|---|---|
+| `save` | every goal with years left (coast: X > age; early: T > age) | extra $/yr through the waterfall (12.4) | $100 | Δ / household pay (no pay → `noPay`) |
+| `spend` | all | the highest retirement spending that meets it; below max($10K, 25% of S) it is not offered (`belowFloor`) | $100, down | (S − S*) / S |
+| `retLater` | retire, coast | the first later R′ ≤ 100; after 80 (`RET_MAX`) it is not offered (`tooLate`) | 1 yr | years × `YEAR_EFFORT` |
+| `coastBoth` | coast (X′ ≤ R − 1); retire when every partner's switch is on | the first later coast age | 1 yr | Σ years × that partner's lost saving / (years to R × pay) |
+| `coastA`, `coastB` | two people: coast (the other held at X; may save to R); retire when that partner's switch is on | the same, one partner | 1 yr | as above, one partner |
+| `drawLess` | draw > 0 and someone coasts before R (not goal 3) | the highest draw | $500, down | (D − D*) × coasting years / (years to R × pay) |
+| `buyLater` | buying | the first later buy age < R | 1 yr | years × `YEAR_EFFORT` × 0.5 |
+| `price` | buying | the highest price ≥ $1,000; below 25% of P it is not offered (`belowFloor`) | $1,000, down | (P − P*) / P |
+| `down` | buying | the first whole % above (scanned, not monotone); from invested assets, more than the portfolio holds at b is not offered (`cashShort`) | 1 point | extra down $ / (years to R × pay) |
+| `noBuy` | buying | the renting plan's margin, as a fixed switch (`houseOn: 0`) | | 0.5; never first while another step works |
+
+`YEAR_EFFORT = 0.04` (a year counts like 4% of pay), `COMBO_TAU = 0.15`, `LEVER_ORDER` = save,
+coastBoth, coastA, coastB, spend, drawLess, retLater, price, buyLater, down, noBuy. These weights are
+a presentation choice for ranking, not advice. A partner's lost saving = (their 401(k) + employer +
+Roth + half the HSA + half the taxable saving) × (1 − after share).
+
+Apply patches: under the coast goal every card's patch (`save`, `spend`, `retLater`, `drawLess`,
+the home levers, renting instead, the combo and the on-track cards) also sets both coast switches on
+at X (merged in one place, `make()`; not counted as parts; the card says "Also sets both of you to
+coast at 55"), so the hero, chart and tiles then judge the same plan as the engine. `coastBoth` under goal 2 also moves `goalAge`; a single-partner coast change under goal 2
+sets `goal` to 1 (the plan as entered is judged from then on; the card says so).
+
+**Infeasible** (a muted line "Not on its own: saving more (coasting at 42 leaves no years to save)",
+no Apply): `noYearsLeft`, `notByTop` (not by 100), `notByRet` (not even saving to R),
+`belowZero` (not even at $0), `exceedsPay` (more than 10 × pay, or saving above household pay),
+`noPay`, `noEffect`, `rentShort` (renting falls short too), and outside the plausible range:
+`tooLate` ("retiring later (would take until 88)"), `belowFloor` ("spending less (would take
+$1,400/yr)", "a cheaper home (would take a home around $46,000)"), `cashShort` (more cash at closing
+than the portfolio holds). Those never reach a card or the hero line.
+
+**Flags** (labels on the card): `atLimit` (key), `hsaEligibility`, `rothIncome`, `matchNote`,
+`catchUp` (age 50+: "Catch-up (50+) not modeled"), `highShare` (household saving ≥ 35% of pay),
+`overPay` (infeasible), `bigCut` (a cut ≥ 25%: "Large cut"), `bridge` (new R < 59½).
+
+### 12.3 Ranking and the combo
+
+Sort feasible levers by [noBuy last, effort, parts (fields changed; each account counts), LEVER_ORDER].
+Keep `coastBoth` and only the better of `coastA` / `coastB`; at most 5 single cards. Size labels,
+shown as "Effort: small" etc.: ≤ 0.05 "Small", ≤ 0.15 "Medium", ≤ 0.30 "Big stretch", above "Very big".
+**Combo**: when the best effort is above 0.15 (or nothing works), for each ordered pair from {save,
+spend, retLater, coastBoth} and f ∈ {0.25, 0.5, 0.75}: fix the first at f × its own solved change
+(rounded to its step; a part past the plausible range is skipped), solve the second for the rest;
+score = max of the two efforts (tie: the sum). Offered ("Two smaller steps: save $X/yr more and retire
+at Y", "Two smaller changes instead of one big one") only if its score beats the best single step, or
+nothing else works, and its merged patch meets the goal; then ranked with the single steps by its
+score, so it can be first and the summary's "Best:". Its labels are both parts' flags, once each; the
+first part's flags come from its own steps (at the defaults the partial Roth stops at 6,950 / 6,900, so
+no Roth `atLimit`). At the defaults: save $14,800/yr more and retire at 67 (score 0.118 against 0.157),
+first.
+
+**On track** (status met): the same solvers, flipped, give the largest change that still meets the
+goal, rounded on the safe side; one line above the list says "Each of these lands right on your
+number, with no cushion." The heading is "Ways to use your head start" only with at least 1% (or a
+year) to spare, otherwise "You're on track"; with no room at all: "On track, just barely: no single
+change leaves room to spare." Cards:
+coast sooner (together, plus the better single partner; with nobody coasting, together =
+`earliest.both`), retire sooner (after X and after buying; `bridge` before 59½), spend more ($100),
+save less (taking back in reverse order: taxable, 401(k)s, Roth IRAs, HSA; never employer money),
+draw more ($500, when someone coasts). Goal 3: spend more and save less. Ranked by benefit: years ×
+0.04, extra spending / spending, or saving freed / pay.
+
+**Sensitivity** (fine print, never ranked, no Apply): the return before inflation (bisection on
+[−20, 30] until the margin is within $1; goal 3 on a 0.01 grid) and the withdrawal rate (spend ÷
+balance when renting, bisection otherwise) the goal would need. When on track, how far they could
+fall ("still works down to a 5.0% return … or with a withdrawal rate as low as 2.8%": a lower rate is
+the cautious one). At the defaults: "For reference, your plan as entered would need an 11.1% return a year before
+inflation (you assume 7.0%), or a 7.0% withdrawal rate (you assume 4.0%). This shows how sensitive
+the plan is; it isn't something to plan on." (71,000 ÷ 1,009,932 = 7.03%.)
+
+### 12.4 Where extra saving goes (`allocate`)
+
+A common, general order with a reason each, never personalized; tiers fill in turn, split evenly
+between eligible partners (B gets half rounded down to $50, A the rest; overflow moves to the
+partner with room), never past a field's limit or a partner's remaining salary. Catch-up
+contributions are never used.
+
+| Tier | Account | Rule | Reason shown |
+|---|---|---|---|
+| 0 | Employer contribution | not changed (a flat % here); a note on the card | "If your plan matches, contributing enough to get the whole match usually comes first." |
+| 1 | HSA | only if one is in use (> 0), up to `hsaLimit` | needs an HSA-eligible plan |
+| 2 | Roth IRA A / B | partners with salary, up to $7,500 | Roth income limits apply |
+| 3 | 401(k) A / B | partners with salary and a plan (401(k) or employer > 0), up to $24,500 | |
+| 4 | `taxSave` (Other investing, taxable) | no limit | |
+
+The card's "Why this order" says it is general information and that this model gives every account
+the same return with no taxes, so the projection is the same whichever account gets the money.
+`unallocate` takes money back in reverse.
+
+**Taxable saving** (`taxSave`, "Other investing (taxable)", its own row after the HSA, $/yr for the
+household, slider 0–50K √): split evenly between partners, each half following its partner's coast
+plan like a self-only HSA (all of it follows A for one person); part of `contribAt().taxable` and the
+total, and a "Taxable" bar under Contributions. 0 by default, so nothing else moves.
+
+### 12.5 Page
+
+A collapsed `<details id="d-suggest">` between the answer card and the chart card, closed by default
+(open state saved like every row). Its summary (two lines, fixed height): "Ways to reach your goal"
+("Ways to use your head start" when on track) over a live value from `suggestSummary`:
+"Best: save $19.7K/yr more (5 accounts)" (one account is named: "(Partner A Roth IRA)"),
+"On track: could coast 4 yrs sooner", "You're already there", "Fix the ages first".
+Inside: "Your goal" as a three-way segmented control (Retire by R / Coast by an age / Retire early,
+as soon as possible), the goal-age field when one is picked, the 1/3/5 chips for goal 3; the buying
+line; a status sentence and a progress bar with a mark at the target ("$1.01M of $1.78M · 57%");
+then the cards: the first is "Smallest change" ("Biggest opportunity" on track; a hairline accent on
+its left edge), the rest "Or". Each card: title, a detail line, How (one line per account, all "from →
+to"; more than two lines fold under "Split across N accounts", N = the lines shown), Effect (icon +
+words, "Reaches $1.78M by 65 (now $1.01M)"; an option with its own FIRE number says "Reaches the
+$1.40M you'd need by 65"; spending is said as coverage, "Your $1.01M would cover $40,300/yr at your
+4.0% withdrawal rate"; goal 3 "FI 2.3 yrs sooner, at about 71.9", with the status in the same
+precision, "FI at about 74.3, 2.3 yrs after 72"), "Watch for" (the "Effort: …" pill and flag chips:
+icon + word on the good/warn/bad tokens), notes, and an
+**Apply** button (full width on phones). Apply sets the inputs, opens or flashes the rows it
+changes (section 3 rule), and toasts "Applied: save $19,700/yr more. Now on track." with Undo
+("Back to your previous plan."). Under the cards: the muted "Not on its own" line, the sensitivity
+note, and the disclaimer: "Educational estimates from this model, not financial advice. Taxes,
+catch-up contributions, income limits and account rules aren't modeled and can change what makes
+sense." At 860px and up the card rows are a two-column label/value grid. While a slider moves, the
+engine, the summary and the cards update at most every 150 ms (above). The body is drawn only while
+open.
+
+The hero's off-track line comes from the same engine (`suggestLine`, shown only when short):
+"Closest steps: save $19.7K/yr more, retire at 75, or spend $40.3K/yr." (rounded like the summary;
+with the goal, e.g. "Closest steps to coast by 45: …", and "If you buy at 45, you'd be $1.42M short. "
+first when the home is on), plus a "See all ways" link that opens the section.
+
+**Copy at the defaults:** save card "Save $19,700/yr more" · "$1,642/mo together · 16% of pay" ·
+"HSA $1,400 → $8,750 (family limit)", "Roth IRA A and B $3,200 → $7,500 each (limit)", "401(k) A
++$1,900, B +$1,850" (HSA +7,350, Roth +4,300 each) · chips "16% of pay", "Needs an HSA-eligible
+plan", "Roth income limits apply" · "Take-home about $1,640/mo lower (before tax effects)."; spend card
+"Plan on $40,300/yr in retirement" · "43% less than your $71,000 plan" · "Your $1.01M would cover
+$40,300/yr at your 4.0% withdrawal rate" · "Large cut" · "Effort: very big"; retire card "Retire at 75
+instead of 65" · "10 more working years". Coast:
+"Keep saving until 61, not 55", "Only A keeps saving to 64; B still coasts at 55". Home: "Buy at 52
+instead of 45", "A home around $310,000", "Rent instead of buying". On track: "Both of you could stop
+saving at 51 instead of 55" ("A could stop saving now" at today's age), "Spend up to $X/yr (+$Y)",
+"Save $X/yr less and still make it", "Retire at 62, 3 yrs sooner".
+
+### 12.6 Output (`CF.suggest(inputs)`)
+
+`{goal: {type, X, T, inferred, coerced?}, scenario: "rent" | "buy", buyAge?, status, margin,
+progress: {have, need, pct, metric: "balance" | "fiAge", fiAge?, fiFrac?}, list (≤ 6, ranked by effort, the combo by its score),
+rejected, sensitivity: {needReturn, inRange, haveReturn, needSwr, swrInRange, haveSwr, cushion?},
+best, fi: {age, wholeAge, top}, inputs}`. A suggestion: `{id, kind: "fix" | "opportunity" | "combo",
+change: {key, from, to, delta, unit}, set (the exact Apply patch), steps (save / save less: {key,
+who, from, to, tier, atLimit}), effect: {metric, before, after, target, yearsSooner?}, effort, size,
+parts, feasible, reason?, flags, goal2 (the goal it was solved against), pair? (combo), benefit?
+(opportunity)}`. Also exported: `goalOf`, `goalPlan`, `measure`, `margin`, `allocate`, `unallocate`,
+`bisect`, `scanAge`, `fiBuy`, `houseApplies`, `YEAR_EFFORT`, `COMBO_TAU`, `LEVER_ORDER`.
+
+### 12.7 Tests (in `tests/run_tests.js`)
+
+On the section 9 fixture (0% real, 28,000/yr, 380,000 at 50, SWR 5%):
+- FIRE 400,000: save 2,000 more, all to the HSA (2,000 → 4,000), one part, and 1,900 falls short;
+  spend 19,000 (= 380,000 × 5%) and 19,100 falls short; retire at 51 (= `retireLater`).
+- FIRE 500,000: save 12,000: HSA to 8,750 (+6,750), then 5,250 for the Roth IRAs: B half 2,600,
+  A 2,650 over A's room of 2,500, so A 7,500 and B 2,750. `allocate(40,000)`: 16,750 to HSA and
+  Roth, then 23,250 split 11,650 / 11,600 → 401(k) A 21,650, B 16,600; a huge amount ends in taxable
+  with every field at or under its limit; one person never touches B; self-only HSA for two reaches
+  8,800; employer money never changes; a partner's room stops at their salary (B at 10,000 pay with
+  6,000 saved: Roth +4,000). `unallocate(8,000)`: 401(k)s first, kA 6,000, kB 1,000.
+- Coast by 45, FIRE 340,000: 240,000 now; save 100,000 / 5 years = 20,000 (19,900 falls short), the
+  patch turns both coast switches on at 45; keep saving to 49 together (= `earliestCoast` both); A
+  alone to 50 with B held at 45, setting goal 1; coasting at today's age → save `noYearsLeft`, spend
+  5,000 still solved, retire later tried.
+- Draw: A coasts at 45 drawing 4,000 (260,000; 280,000 with no draw), FIRE 270,000 (13,500 at 5%):
+  draw 2,000, and 2,500 falls short.
+- On track, FIRE 300,000: spend up to 19,000 (19,100 fails), save 8,000 less (8,100 fails), retire at
+  48 (47 fails), coast sooner together at 48 (= `earliestCoast`).
+- FI by 49: FI at 51 now (margin −2); the save change makes the FI age 49 and 100 less doesn't; FI
+  today → `fiNow`, empty list; never FI → the levers still aim at the goal age.
+- Defaults: save 19,700 = ceil to $100 of 42,452 − 22,784, split HSA +7,350, Roth +4,300 each,
+  401(k) +1,900 / +1,850; spend 40,300; retire at 75 (= the never-coast tile); withdrawal ≈ 7.0%,
+  return ≈ 11.1% (the margin there within $1).
+- Ranking, the combo rule, house levers only when buying (judged against `FIRE_own`; with 300,000
+  invested and 50,000/yr spending a cheaper home and buying later are minimal; renting shows the
+  renting margin), the global invariant (every Apply patch comes back from `sanitize` unclamped and
+  meets its goal), the hash keys `go`, `gx`, `o`, choice cleaning (2 stays 2, 7 → 0, `term`
+  unchanged), taxable saving (2,000/yr → 400,000; with A coasting at 45, A's half stops: 295,000),
+  the speed bound (30 ms off, 50 ms with the home on) and the `ui.js` strings.
+- Review fixes: buying now with little invested (the cash short at closing taken off as a debt, no
+  feasible bigger down payment; a down payment the portfolio can't cover is `cashShort`, one it can is
+  offered); every coast-goal card's patch turns both switches on at its X and then meets the plan as
+  entered; the impossible case (age 70 to 72, no pay) has no feasible card; no card or combo part
+  spends below the floor, retires after 80 or buys under 25% of the price; the combo ranks by its
+  score and carries both parts' flags; the on-track withdrawal-rate wording ("as low as"); the
+  buying scenario named in the status and hero line; goal 3 in one-decimal ages.
 
 ## Sources
 

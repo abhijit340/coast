@@ -496,6 +496,205 @@
     return `Applied: ${t.charAt(0).toLowerCase()}${t.slice(1)}.`;
   }
 
+  // ---------- how you compare (SPEC 13) ----------
+  // Words for CF.compare(): the closed row's summary and, per comparison, a title, a short
+  // value for its row, one plain sentence, a few smaller lines and its sources.
+
+  function ordinal(n) {
+    const m = n % 100, s = m >= 11 && m <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th");
+    return n + s;
+  }
+  // [35, 44] -> "35–44"; [18, 34] -> "under 35"; [75, 120] -> "75 and over".
+  function bandWords(b) {
+    if (!b) return "";
+    if (b[1] >= 120) return `${b[0]} and over`;
+    if (b[0] <= 18) return `under ${b[1] + 1}`;
+    return `${b[0]}–${b[1]}`;
+  }
+  // A percentile result in a sentence ("about the 55th percentile") and short ("~55th percentile").
+  function pctlWords(r) {
+    if (!r || r.kind === "none") return "not comparable";
+    if (r.kind === "below") return r.p === 50 ? "below the median" : `below the ${ordinal(r.p)} percentile`;
+    if (r.kind === "zero") return `at $0, with at least ${Math.round(r.p)}%`;
+    if (r.kind === "top") return `in the top ${r.approx ? "~" : ""}${r.top}%`;
+    return `about the ${ordinal(r.p)} percentile`;
+  }
+  function pctlShort(r) {
+    if (!r || r.kind === "none") return "—";
+    if (r.kind === "below") return r.p === 50 ? "below the median" : `below the ${ordinal(r.p)} percentile`;
+    if (r.kind === "zero") return "none yet";
+    if (r.kind === "top") return `top ${r.approx ? "~" : ""}${r.top}%`;
+    return `~${ordinal(r.p)} percentile`;
+  }
+  const rate1 = (x) => (+x).toFixed(1) + "%";
+  const pct = (x) => Math.round(x) + "%";
+  const mult = (x) => String(+(+x).toFixed(x < 1 ? 2 : 1)) + "×"; // 0.36×, 3.6×, 6×, 0×
+  // A rate next to a target: one decimal, or two when one decimal would hide which side it's on.
+  function rateVs(rate, target) {
+    const one = (+rate).toFixed(1);
+    return (rate < target && +one >= target) || (rate >= target && +one < target) ? (+rate).toFixed(2) + "%" : one + "%";
+  }
+
+  /** The closed "How you compare" row: invested assets against all households the same age (named, since a couple's rows also show couples). */
+  function compareSummary(c) {
+    if (!c || !c.assets) return "for ages 18 and up";
+    const r = c.assets.r;
+    if (r.kind === "below") return `below the ${ordinal(r.p)} percentile of households your age`;
+    if (r.kind === "top") return `top ${r.approx ? "~" : ""}${r.top}% of households your age`;
+    return `~${ordinal(r.p)} percentile of households your age`;
+  }
+
+  /** The seven comparisons as words; `bench` supplies the source names and links. */
+  function compareItems(c, bench) {
+    const S = bench.sources, src = (key, year) => ({ label: S[key].label, url: S[key].url, year });
+    const two = c.couple, items = [];
+    const who = (p) => (two ? p : "You");
+    const age = bandWords;
+
+    // 1. Invested assets
+    if (c.assets) {
+      const a = c.assets, med = a.cuts.find((q) => q.p === 50);
+      const subs = [];
+      if (a.couples) {
+        const cr = a.couples.r, c50 = a.couples.cuts.find((q) => q.p === 50), c90 = a.couples.cuts.find((q) => q.p === 90);
+        const where = cr.kind === "below" ? "below their median" : cr.kind === "top" ? "in their top 10%" : `at about their ${ordinal(cr.p)} percentile`;
+        subs.push(`Among couples your age the median is ${cmp(c50.v)} and the top 10% have ${cmp(c90.v)} or more: you're ${where}.`);
+      }
+      subs.push("Compared with the survey's financial assets: cash, investments and retirement accounts, not home equity. Your total leaves out the emergency fund, so you may rank a little higher than shown.");
+      items.push({
+        id: "assets", title: "Invested assets", value: pctlShort(a.r),
+        line: `Your ${cmp(a.x)} invested is ${pctlWords(a.r)} for households aged ${age(a.band)}, where the median is ${cmp(med.v)}.`,
+        subs, sources: [src(a.src, `${a.year} survey`)],
+      });
+    } else {
+      items.push({ id: "assets", title: "Invested assets", value: "—", line: "The survey covers households headed by someone 18 or older.", subs: [], sources: [] });
+    }
+
+    // 2. Retirement accounts
+    if (c.retirement) {
+      const t = c.retirement, grp = t.group === "couples" ? "couples" : "households", h = t.holders;
+      const hgrp = h.group === "couples" ? "couples" : "households";
+      let line;
+      if (t.r.kind === "zero") line = `Like about ${pct(100 - h.pct)} of ${hgrp} aged ${age(t.band)}, you don't have money in retirement accounts yet.`;
+      else line = `Your ${cmp(t.x)} in retirement accounts is ${pctlWords(t.r)} for ${grp} aged ${age(t.band)}, counting those with none.`;
+      const subs = [`Among the ${pct(h.pct)} of ${hgrp} your age who have an account, the median is ${cmp(h.median)}.`];
+      if (t.couplesMissing) subs.push("There's no couples-only spread past 64, so this compares with all households your age.");
+      subs.push("Counts your invested money except what you keep in taxable accounts and cash (set under Bridge). The survey doesn't count HSAs.");
+      items.push({
+        id: "retire", title: "Retirement accounts", value: t.r.kind === "zero" ? "none yet" : pctlShort(t.r) + (t.group === "couples" ? " (couples)" : ""),
+        line, subs, sources: [src("scf_tables", `${t.year} share and median`), src(t.src, `${t.year} percentiles`)],
+      });
+    } else {
+      items.push({ id: "retire", title: "Retirement accounts", value: "—", line: "The survey covers households headed by someone 18 or older.", subs: [], sources: [] });
+    }
+
+    // 3. Saving rate
+    if (c.saving) {
+      const s = c.saving, vg = s.vanguard, T = s.target, subs = [];
+      subs.push(`With Roth IRAs, the HSA and other investing: ${rate1(s.totalRate)} of pay.`);
+      if (s.ageDeferral !== null) subs.push(`Your own part, ${rate1(s.deferral)}, compares with an average of ${rate1(s.ageDeferral)} for savers aged ${age(s.ageBand)}.`);
+      const paid = s.people.filter((q) => q.pay > 0);
+      const verdict = (q) => (q.maxed ? "at the 401(k) maximum"
+        : q.rate <= 0 ? `not contributing yet (target ${q.target}%)`
+        : q.meets ? `${rateVs(q.rate, q.target)}, meeting the ${q.target}% target`
+        : `${rateVs(q.rate, q.target)}, ${q.target - q.rate < 0.1 ? "a hair under" : q.target - q.rate < 0.5 ? "just under" : "under"} the ${q.target}% target`);
+      const same = paid.length === 2 && verdict(paid[0]) === verdict(paid[1]);
+      const list = same ? `A and B each: ${verdict(paid[0])}.` : paid.map((q) => `${who(q.p)}: ${verdict(q)}.`).join(" ");
+      subs.push(`Vanguard's target by pay, counting the employer's share: ${T.rates[0]}% under ${cmp(T.under)}, ${T.rates[1]}% to ${cmp(T.over)}, ${T.rates[2]}% above, or the 401(k) maximum; ${T.meetPct}% of its savers meet theirs. ${list}`);
+      if (s.anyMaxed) {
+        const maxers = paid.filter((q) => q.maxed).map((q) => who(q.p));
+        const hp = s.atMaxHighPay;
+        subs.push(`Maxing the 401(k) puts ${two ? maxers.join(" and ") : "you"} with the ${s.atMax}% of savers who do (${s.atMaxAge !== null ? `${s.atMaxAge}% at ${age(s.ageBand)}; ` : ""}${hp.pct}% of those paid ${cmp(hp.floor)} or more).`);
+      }
+      subs.push(`These cover workers in employer plans run by Vanguard or Fidelity, their current plan only, not all Americans. Counting eligible workers who don't join, Vanguard's figure is ${rate1(vg.inclZero)}.`);
+      items.push({
+        id: "saving", title: "Saving rate", value: `${rate1(s.planRate)} vs ${rate1(vg.median)} typical`,
+        line: `You put ${rate1(s.planRate)} of pay into 401(k)s, counting the employer's share. The typical Vanguard saver puts in ${rate1(vg.median)} (average ${rate1(vg.mean)}), and Fidelity's average is ${rate1(s.fidelity.total)}.`,
+        subs, sources: [src(vg.src, String(vg.year)), src(s.fidelity.src, "Q2 " + s.fidelity.year)],
+      });
+    } else {
+      items.push({ id: "saving", title: "Saving rate", value: "—", line: "Add a salary to compare saving rates.", subs: [], sources: [] });
+    }
+
+    // 4. Household income
+    {
+      const n = c.income, subs = [];
+      const peer = n.peer.kind === "married" ? "married couples" : "one-person and other nonfamily households";
+      let line = n.x > 0 ? `Your household's pay, ${cmp(n.x)}, is ${pctlWords(n.r)} of all US households. ` : "With no pay entered, there's no income to compare. ";
+      line += `The median for ${peer} is ${cmp(n.peer.median)}` + (n.ageMedian !== null ? `, and for households headed by someone aged ${age(n.ageBand)}, ${cmp(n.ageMedian)}.` : ".");
+      const paid = n.people.filter((q) => q.pay > 0);
+      // Two equal salaries read as one line ("A and B each earn ...").
+      const groups = paid.length === 2 && paid[0].pay === paid[1].pay ? [[paid[0], "A and B each earn"]]
+        : paid.map((q) => [q, two ? `${q.p} earns` : "You earn"]);
+      for (const [q, lead] of groups) {
+        subs.push(`${lead} ${cmp(q.pay)}: ${pctlWords(q.r)} of full-time wage and salary workers ${n.payGroup === "25+" ? "25 and over" : "16 and over"} (BLS weekly pay × 52)` +
+          (q.median !== null ? `. The median full-time worker aged ${age(q.band)} earns ${cmp(q.median)}.` : "."));
+      }
+      subs.push(`Census income counts all money income before tax, not just pay.${n.peer.kind === "married" ? " Married couples include those with one earner." : ""}`);
+      items.push({
+        id: "income", title: "Household income", value: n.x > 0 ? pctlShort(n.r) : "—", line, subs,
+        sources: [src(n.src, `${n.year} income`), src(n.srcMedians, `${n.year} medians`), src("census_t11", `${n.ftyrYear} earnings`), src("bls_weekly", n.payYear)],
+      });
+    }
+
+    // 5. Savings as a multiple of pay
+    if (c.multiple) {
+      const m = c.multiple, pts = m.points, subs = [];
+      const steps = pts.map(([a, k]) => `${k}× by ${a}`).join(", ");
+      let line = `You have ${mult(m.x)} your pay saved (${cmp(m.assets)} ÷ ${cmp(m.pay)}). `;
+      const end = pts[pts.length - 1];
+      line += m.guide === null ? `Fidelity's guideline starts at ${pts[0][1]}× by ${pts[0][0]}.`
+        : m.past ? `Fidelity's guideline is ${end[1]}× by ${end[0]}.` : `Fidelity's guideline at ${m.age} is about ${mult(m.guide)}.`;
+      subs.push(`The guideline: ${steps}.`);
+      subs.push("This uses all your invested money, taxable accounts and cash included; Fidelity's guideline counts savings meant for retirement.");
+      subs.push("A rule of thumb that assumes saving 15% from 25 and retiring at 67, not what people actually have.");
+      items.push({
+        id: "multiple", title: "Savings vs. pay", value: m.guide === null ? `${mult(m.x)} · guideline from ${pts[0][0]}` : `${mult(m.x)} vs ${mult(m.guide)} guideline`,
+        line, subs, sources: [src(m.src, "2026")],
+      });
+    } else {
+      items.push({ id: "multiple", title: "Savings vs. pay", value: "—", line: "Add a salary to compare savings with pay.", subs: [], sources: [] });
+    }
+
+    // 6. Retirement age
+    {
+      const r = c.retAge, d = r.x - r.actual, subs = [];
+      const rel = d === 0 ? "the same age as the typical retiree" : `${Math.abs(d)} year${Math.abs(d) === 1 ? "" : "s"} ${d < 0 ? "earlier" : "later"} than the typical retiree`;
+      subs.push(`${r.earlier}% of retirees stopped earlier than they planned; health or disability was the top reason (${r.health}%).`);
+      if (r.x < 60) subs.push(`Only about ${r.before60}% of adults not yet retired expect to stop before 60.`);
+      const half = (a) => { const h = Math.round(a * 2) / 2; return Math.floor(h) + (h % 1 ? "½" : ""); };
+      subs.push(`Gallup's averages: ${r.gallup.expectedMean} expected, ${r.gallup.actualMean} actual. Labor-force data (CRR, ${r.crr.year}): by about ${half(r.crr.men)} for men and ${half(r.crr.women)} for women, fewer than half still work.`);
+      subs.push("Expected and actual ages come from surveys.");
+      items.push({
+        id: "retage", title: "Retirement age", value: `${r.x} vs ${r.actual} actual`,
+        line: `You plan to retire at ${r.x}, ${rel}. Workers expect to retire at ${r.expected} (median); retirees' median actual age was ${r.actual}.`,
+        subs, sources: [src(r.src, String(r.year)), src(r.gallup.src, String(r.gallup.year))].concat(r.x < 60 ? [src("gallup2018", "2018")] : [], [src(r.crr.src, String(r.crr.year))]),
+      });
+    }
+
+    // 7. Retirement spending
+    {
+      const s = c.spending, subs = [];
+      if (s.ssShare !== null) {
+        const one = s.ssShare >= 1 ? "more than all of it" : `${pct(s.ssShare * 100)} of it`;
+        const both = two ? (s.ssShare * 2 >= 1 ? "; two would cover all of it" : `; two would cover ${pct(s.ssShare * 200)}`) : "";
+        subs.push(`One average Social Security retirement benefit, ${money(s.ssMonthly)}/mo (${cmp(s.ssYear)}/yr), would cover ${one}${both}. This calculator doesn't count Social Security.`);
+      }
+      subs.push(`Average spending of households headed by someone 65 or older (${s.people} people on average), ${s.year} survey raised for inflation. Without payroll taxes and pension contributions, which a retirement budget usually leaves out, it's ${cmp(s.core65)}.`);
+      items.push({
+        id: "spend", title: "Retirement spending", value: `${cmp(s.x)} vs ${cmp(s.all65)} at 65+`,
+        line: `You plan to spend ${cmp(s.x)} a year. Households headed by someone 65 or older spend ${cmp(s.all65)} on average (${cmp(s.a6574)} at 65–74, ${cmp(s.a75)} at 75+).`,
+        subs, sources: [src(s.src, `${s.year} survey`), src(s.ssSrc, s.ssPeriod)],
+      });
+    }
+    return items;
+  }
+
+  const COMPARE_NOTE = "Comparisons use public survey data (Federal Reserve SCF 2025, Census CPS 2026, BLS, Vanguard, Fidelity, EBRI, SSA). " +
+    "Dollar figures are in today's dollars: older ones are raised by consumer prices (CPI-U) to September 2026. Percentiles are estimated " +
+    "between published points and are approximate. Two incomes are compared as a couple (the survey's couples include unmarried partners), " +
+    "one as a single person, both partners at your current age. For context only, not financial advice.";
+
   // ---------- touch-safe sliders (SPEC 2.1) ----------
   // On a touch screen a range input jumps to wherever a finger lands and grabs vertical
   // swipes meant for the page. guardSlider() takes touches over instead: only a sideways
@@ -626,6 +825,7 @@
     DISCLAIMER, SIZE_LABEL, accountName, phrase, suggestSummary, suggestLine, goalText, statusText, progressText,
     sensitivityText, splitLines, rejectedText, effectText, cardText, appliedText, contribSummary, ecSummary, sparkSummary, partnerSummary, afterCoast, heatSummary, hsaSummary,
     drawSummary, assumeSummary, bridgeSummary, houseSummary, houseCostsSummary, houseHowSummary, breakevenSummary,
+    ordinal, bandWords, pctlWords, pctlShort, rateVs, mult, compareSummary, compareItems, COMPARE_NOTE,
     SLOP, REACH, classifyGesture, gestureEnd, gestureFinish, thumbCenter, nearThumb, dragValue, guardSlider,
   };
   root.CoastUI = api;

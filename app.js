@@ -1794,6 +1794,185 @@ function renderHouse(res, h) {
   $("house-be").innerHTML = `<p class="house-be-p">${gText}</p><p class="house-be-p">${iText}</p><p class="fine">Breakevens compare net worth at ${R} only, the home after selling costs; the FI ages above can tell a different story.</p>`;
 }
 
+// ---------- how you compare (SPEC 13) ----------
+// One closed row at the bottom of the page; inside, one row per comparison. Words come from
+// UI.compareItems, numbers from CF.compare and the published figures in benchmarks.js.
+
+const BENCH = window.CoastBench || null;
+const CMP_IDS = ["assets", "retire", "saving", "income", "multiple", "retage", "spend"];
+
+// A label's box, kept inside the plot: [x0, x1] for a label at x with this anchor.
+const labelBox = (x, text, px, W) => {
+  const w = textW(text, px), cx = Math.min(Math.max(x, w / 2 + 1), W - w / 2 - 1);
+  return { cx, x0: cx - w / 2, x1: cx + w / 2 };
+};
+
+// Percentile strip: the 0-100 percentile axis, solid between the published cutpoints (dashed
+// outside them, where nothing is known), a tick and value for each cutpoint, and your marker.
+// Below or above the published range the marker is hollow and sits in that zone.
+// A leading run of $0 cutpoints (most young households have no retirement account) is one
+// labelled segment from P0 ("$0", `zeroWho` under it), never single ticks a $0 dot could sit on.
+function stripSVG(W, cuts, r, labelled, zeroWho) {
+  const L = 10, R = 10, Y = 28, H = 64;
+  const x = (p) => L + p / 100 * (W - L - R);
+  const hi = cuts[cuts.length - 1].p;
+  let z = null;
+  for (const c of cuts) { if (c.v === 0) z = c.p; else break; }
+  const lo = z === null ? cuts[0].p : z;
+  let s = `<line class="strip-out" x1="${x(0)}" x2="${x(100)}" y1="${Y}" y2="${Y}"/>`;
+  let lastX1 = -1e9;
+  if (z !== null) {
+    s += `<line class="strip-zero" x1="${x(0)}" x2="${x(z).toFixed(1)}" y1="${Y}" y2="${Y}"/>`;
+    const sub = zeroWho || `up to P${z}`, b = labelBox(x(z / 2), textW("$0", 10) > textW(sub, 10) ? "$0" : sub, 10, W);
+    s += `<text class="tick strong" x="${b.cx.toFixed(1)}" y="${Y + 20}" text-anchor="middle">$0</text>`;
+    s += `<text class="tick" x="${b.cx.toFixed(1)}" y="${Y + 31}" text-anchor="middle">${esc(sub)}</text>`;
+    lastX1 = b.x1;
+  }
+  if (hi > lo) s += `<line class="strip-in" x1="${x(lo).toFixed(1)}" x2="${x(hi).toFixed(1)}" y1="${Y}" y2="${Y}"/>`;
+  for (const c of cuts) {
+    if (z !== null && c.p <= z) continue; // inside the $0 segment
+    const cx = x(c.p);
+    s += `<line class="strip-tick" x1="${cx.toFixed(1)}" x2="${cx.toFixed(1)}" y1="${Y - 6}" y2="${Y + 6}"/>`;
+    if (!labelled(c.p)) continue;
+    const val = c.v <= 0 ? "$0" : CF.fmtCompact(c.v);
+    const b = labelBox(cx, val, 10, W);
+    if (b.x0 < lastX1 + 6) continue; // too close to the last label: tick only
+    lastX1 = b.x1;
+    s += `<text class="tick strong" x="${b.cx.toFixed(1)}" y="${Y + 20}" text-anchor="middle">${val}</text>`;
+    s += `<text class="tick" x="${b.cx.toFixed(1)}" y="${Y + 31}" text-anchor="middle">${c.p === 50 ? "median" : "P" + c.p}</text>`;
+  }
+  let at, words, exact = true;
+  if (r.kind === "in") { at = r.p; words = `You ~${UI.ordinal(r.p)}`; }
+  else if (r.kind === "below") { at = lo / 2; words = r.p === 50 ? "You: below the median" : `You: below P${lo}`; exact = false; }
+  else if (r.kind === "zero") { at = r.p / 2; words = "You: $0"; exact = false; }
+  else if (r.approx) { at = 100 - r.top; words = `You: top ~${r.top}%`; }
+  else { at = (hi + 100) / 2; words = `You: top ${r.top}%`; exact = false; }
+  const mx = x(at), b = labelBox(mx, words, 11, W);
+  s += `<circle class="${exact ? "dot-proj" : "dot-open"}" cx="${mx.toFixed(1)}" cy="${Y}" r="5.5"/>`;
+  s += `<text class="end-label halo" x="${b.cx.toFixed(1)}" y="${Y - 12}" text-anchor="middle">${esc(words)}</text>`;
+  return { s, H };
+}
+
+// A value axis with reference ticks (labels below, a second row only if two would overlap) and your marker above.
+function refAxisSVG(W, lo, hi, refs, you, fmt) {
+  const L = 10, R = 10, Y = 28;
+  const x = (v) => L + (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo) * (W - L - R);
+  let s = `<line class="base" x1="${L}" x2="${W - R}" y1="${Y}" y2="${Y}"/>`;
+  s += `<text class="tick" x="${L}" y="${Y - 8}">${fmt(lo)}</text><text class="tick" x="${W - R}" y="${Y - 8}" text-anchor="end">${fmt(hi)}</text>`;
+  const rows = [];
+  for (const rf of refs.slice().sort((a, b) => a.v - b.v)) {
+    // Two short lines per reference (its value, then whose it is), like the percentile strips.
+    const cx = x(rf.v);
+    const b = labelBox(cx, textW(rf.top) > textW(rf.sub) ? rf.top : rf.sub, 10, W);
+    let row = 0;
+    while ((rows[row] === undefined ? -1e9 : rows[row]) > b.x0 - 6) row++;
+    rows[row] = b.x1;
+    const dy = row * 24;
+    s += `<line class="strip-tick" x1="${cx.toFixed(1)}" x2="${cx.toFixed(1)}" y1="${Y - 6}" y2="${Y + 6}"/>`;
+    s += `<text class="tick strong" x="${b.cx.toFixed(1)}" y="${Y + 20 + dy}" text-anchor="middle">${esc(rf.top)}</text>`;
+    s += `<text class="tick" x="${b.cx.toFixed(1)}" y="${Y + 31 + dy}" text-anchor="middle">${esc(rf.sub)}</text>`;
+  }
+  const mx = x(you.v), b = labelBox(mx, you.label, 11, W);
+  s += `<circle class="dot-proj" cx="${mx.toFixed(1)}" cy="${Y}" r="5.5"/>`;
+  s += `<text class="end-label halo" x="${b.cx.toFixed(1)}" y="${Y - 12}" text-anchor="middle">${esc(you.label)}</text>`;
+  return { s, H: Y + 36 + Math.max(0, rows.length - 1) * 24 };
+}
+
+// Fidelity's guideline (multiple of pay by age) as a line, with your multiple as a dot.
+function multipleSVG(W, m) {
+  const H = 124, L = 30, R = 12, T = 16, B = 20, pts = m.points;
+  const a0 = Math.min(25, m.age - 1), a1 = Math.max(70, m.age + 1);
+  const yMax = Math.max(pts[pts.length - 1][1], m.x * 1.08), step = niceStep(yMax / 3), top = Math.ceil(yMax / step - 1e-9) * step;
+  const x = (a) => L + (a - a0) / (a1 - a0) * (W - L - R);
+  const y = (k) => T + (1 - k / top) * (H - T - B);
+  const fmtM = (k) => +k.toFixed(2) + "×";
+  let s = "";
+  for (let k = 0; k <= top + 1e-9; k += step) {
+    s += `<line class="${k === 0 ? "base" : "grid"}" x1="${L}" x2="${W - R}" y1="${y(k).toFixed(1)}" y2="${y(k).toFixed(1)}"/>`;
+    s += `<text class="tick" x="${L - 5}" y="${(y(k) + 3).toFixed(1)}" text-anchor="end">${fmtM(k)}</text>`;
+  }
+  s += `<path class="l-coast" d="${pts.map(([a, k], i) => `${i ? "L" : "M"}${x(a).toFixed(1)} ${y(k).toFixed(1)}`).join("")}"/>`;
+  for (const [a, k] of pts) {
+    s += `<circle class="dot-coast" cx="${x(a).toFixed(1)}" cy="${y(k).toFixed(1)}" r="3"/>`;
+    s += `<text class="tick" x="${x(a).toFixed(1)}" y="${H - 4}" text-anchor="middle">${a}</text>`;
+  }
+  const last = pts[pts.length - 1];
+  s += `<text class="ref-label halo" x="${(x(last[0]) - 6).toFixed(1)}" y="${(y(last[1]) - 7).toFixed(1)}" text-anchor="end">Fidelity guideline</text>`;
+  if (m.guide !== null) {
+    s += `<circle class="dot-open guide" cx="${x(m.age).toFixed(1)}" cy="${y(m.guide).toFixed(1)}" r="4"/>`;
+    s += `<text class="tick strong halo" x="${(x(m.age) - 7).toFixed(1)}" y="${(y(m.guide) - 6).toFixed(1)}" text-anchor="end">${m.past ? `${fmtM(last[1])} by ${last[0]}` : `${fmtM(+m.guide.toFixed(1))} at ${m.age}`}</text>`;
+  }
+  const ux = x(m.age), uy = y(m.x), txt = `You ${fmtM(+m.x.toFixed(m.x < 1 ? 2 : 1))}`;
+  const right = ux + 10 + textW(txt, 11) < W - R;
+  s += `<circle class="dot-proj" cx="${ux.toFixed(1)}" cy="${uy.toFixed(1)}" r="5"/>`;
+  s += `<text class="end-label halo" x="${(right ? ux + 9 : ux - 9).toFixed(1)}" y="${(Math.max(uy - 6, T + 4)).toFixed(1)}" text-anchor="${right ? "start" : "end"}">${txt}</text>`;
+  return { s, H };
+}
+
+// Spending: you, the 65+ groups and one Social Security benefit, as bars from $0.
+function spendSVG(W, sp) {
+  const rows = [["You", sp.x, "bar-you"], ["All 65+", sp.all65, "bar-ref"], ["Ages 65–74", sp.a6574, "bar-ref"],
+    ["Ages 75+", sp.a75, "bar-ref"], ["Social Security", sp.ssYear, "bar-ss"]];
+  const x0 = 98, x1 = W - 52, pitch = 24, bh = 14;
+  const max = Math.max(1, ...rows.map((r) => r[1])), sx = (v) => v / max * (x1 - x0);
+  let s = "";
+  rows.forEach(([lab, v, cls], i) => {
+    const y0 = i * pitch + 2;
+    s += `<text class="lab" x="0" y="${y0 + 11}">${lab}</text>`;
+    s += `<rect class="${cls}" x="${x0}" y="${y0}" width="${Math.max(0.5, sx(v)).toFixed(1)}" height="${bh}" rx="3"/>`;
+    s += `<text class="val" x="${(x0 + sx(v) + 6).toFixed(1)}" y="${y0 + 11}">${CF.fmtCompact(v)}</text>`;
+  });
+  s += `<line class="base" x1="${x0}" x2="${x0}" y1="0" y2="${rows.length * pitch - 6}"/>`;
+  return { s, H: rows.length * pitch };
+}
+
+function compareViz(id, c, W) {
+  if (id === "assets" && c.assets) return stripSVG(W, c.assets.cuts, c.assets.r, () => true);
+  if (id === "retire" && c.retirement) {
+    const t = c.retirement;
+    return stripSVG(W, t.cuts, t.r, () => true, `${Math.round(t.noneShare)}% of ${t.group === "couples" ? "couples" : "households"}`);
+  }
+  if (id === "income" && c.income.x > 0) return stripSVG(W, c.income.cuts, c.income.r, (p) => p === 10 || p === 50 || p === 90);
+  if (id === "saving" && c.saving) {
+    // The Vanguard median and Fidelity average (Vanguard's mean, half a point from its median, is in the sentence).
+    const s = c.saving, f = (v) => v.toFixed(1) + "%";
+    const hi = Math.max(16, Math.ceil((s.planRate + 2) / 2) * 2);
+    return refAxisSVG(W, 0, hi, [{ v: s.vanguard.median, top: f(s.vanguard.median), sub: "Vanguard" },
+      { v: s.fidelity.total, top: f(s.fidelity.total), sub: "Fidelity" }],
+    { v: s.planRate, label: `You ${f(s.planRate)}` }, (v) => v + "%");
+  }
+  if (id === "multiple" && c.multiple) return multipleSVG(W, c.multiple);
+  if (id === "retage") {
+    // Round axis ends (40, 45 ... 70), so an end never reads like your own age.
+    const r = c.retAge, lo = Math.min(55, Math.floor((r.x - 3) / 5) * 5), hi = Math.max(70, Math.ceil((r.x + 3) / 5) * 5);
+    return refAxisSVG(W, lo, hi, [{ v: r.actual, top: String(r.actual), sub: "retirees" }, { v: r.expected, top: String(r.expected), sub: "workers" }],
+      { v: r.x, label: `You ${r.x}` }, (v) => "age " + v);
+  }
+  if (id === "spend") return spendSVG(W, c.spending);
+  return null;
+}
+
+function renderCompare() {
+  const g = $("compare-g");
+  if (!BENCH) { g.hidden = true; return; }
+  const c = CF.compare(values, BENCH), items = UI.compareItems(c, BENCH);
+  // "~" is read aloud as "about".
+  const said = (id, t) => { $(id).innerHTML = `<span aria-hidden="true">${esc(t)}</span><span class="visually-hidden">${esc(UI.spoken(t))}</span>`; };
+  said("sv-compare", UI.compareSummary(c));
+  $("cmp-note").textContent = UI.COMPARE_NOTE;
+  for (const it of items) {
+    said("cv-" + it.id, it.value);
+    const body = $("cb-" + it.id);
+    if (!shown(body)) continue; // drawn when opened (a closed section measures 0 wide)
+    const W = Math.max(260, body.clientWidth);
+    const viz = compareViz(it.id, c, W);
+    const svg = viz ? `<svg class="cmp-viz" viewBox="0 0 ${W} ${viz.H}" height="${viz.H}" role="img" aria-label="${esc(it.line)}">${viz.s}</svg>` : "";
+    const subs = it.subs.length ? `<ul class="cmp-subs">${it.subs.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : "";
+    const srcs = it.sources.length ? `<p class="fine cmp-src">${it.sources.map((q) => `${esc(q.year)}: <a href="${esc(q.url)}" rel="noopener">${esc(q.label)}</a>`).join(" · ")}</p>` : "";
+    body.innerHTML = `<p class="cmp-line">${esc(it.line)}</p>${svg}${subs}${srcs}`;
+  }
+}
+
 // ---------- bottom bar ----------
 
 function renderPeek(res) {
@@ -1848,7 +2027,7 @@ function applyUiState() {
   // Wide screens: the numbers start open (there's room for them) until the reader closes them.
   // Each section falls back to its own default unless the reader has opened or closed it.
   const wide = !!(window.matchMedia && window.matchMedia("(min-width: 860px)").matches);
-  const dflt = { "d-kpis": wide };
+  const dflt = { "d-kpis": wide, "d-cmp-assets": true };
   for (const d of document.querySelectorAll("details[id]")) setOpen(d, UI.isOpenIn(uiOpen, d.id, dflt[d.id]));
   setLegendOpen(UI.isOpenIn(uiOpen, "legend-x", false), false);
 }
@@ -1861,7 +2040,7 @@ document.addEventListener("toggle", (e) => {
   if (d.open) {
     // Content opens below its summary; nothing is scrolled. Draw what was skipped while closed,
     // right away (the toggle event already runs after the section is open and laid out).
-    if (result) { renderContrib(result); renderEarliest(result); renderBridge(result, bridgeRes); renderHeat(result, gridRes); syncInfo(); }
+    if (result) { renderContrib(result); renderEarliest(result); renderBridge(result, bridgeRes); renderHeat(result, gridRes); renderCompare(); syncInfo(); }
     if (d.id === "d-suggest" && sugRes) renderSuggestBody(sugRes);
   } else {
     // Closing a long section can leave its summary above the screen: bring it back, no further.
@@ -1917,6 +2096,7 @@ function drawAllCharts() {
   renderContrib(result);
   renderEarliest(result);
   renderBridge(result, bridgeRes);
+  renderCompare();
   syncInfo();
 }
 

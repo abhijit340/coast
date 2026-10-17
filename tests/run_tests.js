@@ -25,6 +25,9 @@ const CF = sandbox.CoastFire;
 // ui.js (summary lines, saved open/closed state) loads after calc.js, as in the page.
 vm.runInContext(fs.readFileSync(path.join(ROOT, "ui.js"), "utf8"), sandbox, { filename: "ui.js" });
 const UI = sandbox.CoastUI;
+// benchmarks.js (published US figures for "How you compare", SPEC 13) loads first in the page.
+vm.runInContext(fs.readFileSync(path.join(ROOT, "benchmarks.js"), "utf8"), sandbox, { filename: "benchmarks.js" });
+const BENCH = sandbox.CoastBench;
 
 let passed = 0, failed = 0;
 function check(name, ok, detail) {
@@ -1088,6 +1091,169 @@ check("nice rounding", CF.niceRound(1234567, 1000) === 1250000 && CF.niceRound(4
   check("applied toast text", UI.appliedText(dsave, DS) === "Applied: save $19,700/yr more.");
 }
 
+// ---------- how you compare: benchmarks and percentiles (SPEC 13) ----------
+{
+  // The data file: frozen, every series names a listed source, every source links over https,
+  // and cutpoints rise with the percentile in every band.
+  check("benchmarks are deep-frozen", Object.isFrozen(BENCH) && Object.isFrozen(BENCH.financialAssets.bands[0]));
+  const series = [BENCH.cpi, BENCH.financialAssets, BENCH.retirementAccounts, BENCH.savingRates.vanguard, BENCH.savingRates.fidelity,
+    BENCH.householdIncome, BENCH.earnings.ftyr, BENCH.earnings.blsWeekly, BENCH.fidelityGuide, BENCH.retirementAge.ebri,
+    BENCH.retirementAge.gallup, BENCH.retirementAge.gallupBefore60, BENCH.retirementAge.crr, BENCH.spending, BENCH.socialSecurity];
+  check("every benchmark series names a listed source", series.every((x) => BENCH.sources[x.src]), series.filter((x) => !BENCH.sources[x.src]).map((x) => x.src).join());
+  check("every benchmark source links over https", Object.values(BENCH.sources).every((q) => /^https:\/\//.test(q.url) && q.label));
+  const rising = (o) => { const c = CF.cutsOf(o); return c.every((q, i) => i === 0 || q.v >= c[i - 1].v); };
+  const bandSets = [BENCH.financialAssets.bands, BENCH.financialAssets.couples, BENCH.retirementAccounts.bands.map((b) => b.uncond),
+    BENCH.retirementAccounts.couples.filter((b) => b.uncond).map((b) => b.uncond), [BENCH.householdIncome.all, BENCH.earnings.blsWeekly.age16plus, BENCH.earnings.blsWeekly.age25plus]];
+  check("published cutpoints rise with the percentile", bandSets.every((set) => set.every(rising)));
+  check("the SCF age bands cover 18 and up with no gaps", [BENCH.financialAssets.bands, BENCH.retirementAccounts.bands].every((bs) =>
+    bs[0].age[0] === 18 && bs[bs.length - 1].age[1] === 120 && bs.every((b, i) => i === 0 || b.age[0] === bs[i - 1].age[1] + 1)));
+
+  // CPI: today = value x 336.940 / the year's average; the stored note's factors to 4 places.
+  eq("CPI factor 2025 = 336.940 / 321.943", CF.cpiFactor(BENCH, 2025), 336.940 / 321.943, 1e-12);
+  check("CPI factors match the note: 2022 1.1513, 2023 1.1058, 2024 1.0741, 2025 1.0466",
+    [[2022, 1.1513], [2023, 1.1058], [2024, 1.0741], [2025, 1.0466]].every(([y, f]) => Math.abs(CF.cpiFactor(BENCH, y) - f) < 0.00005));
+  check("current-dollar series and rates are not inflated (null, 2026 -> 1)", CF.cpiFactor(BENCH, null) === 1 && CF.cpiFactor(BENCH, 2026) === 1);
+
+  // Age bands: inclusive at both ends; none under 18 in the SCF.
+  const fa = BENCH.financialAssets.bands;
+  check("age bands: 34 -> 18-34, 35 -> 35-44, 44 -> 35-44, 120 -> 75+, 17 -> none",
+    CF.bandOf(fa, 34).age[1] === 34 && CF.bandOf(fa, 35).age[0] === 35 && CF.bandOf(fa, 44).age[0] === 35 &&
+    CF.bandOf(fa, 120).age[0] === 75 && CF.bandOf(fa, 17) === null);
+  check("cutsOf sorts by percentile, scales, and ignores means and other keys",
+    J(CF.cutsOf({ p90: 9, mean: 99, p25: 2, median: 5, p50: 5 }, 2)) === J([{ p: 25, v: 4 }, { p: 50, v: 10 }, { p: 90, v: 18 }]));
+
+  // Percentiles, hand-worked on cutpoints a factor of 4 apart: P25 100, P50 400, P75 1600, P90 6400.
+  const C = CF.cutsOf({ p25: 100, p50: 400, p75: 1600, p90: 6400 }), LOG = { log: true };
+  const P = (x, cuts, o) => CF.percentileOf(x, cuts || C, o === undefined ? LOG : o);
+  check("log interpolation: 200 is halfway in log terms from 100 to 400 -> 25 + 12.5 = 37.5 -> 38", P(200).kind === "in" && P(200).p === 38);
+  check("linear interpolation: 200 is a third of the way from 100 to 400 -> 33", P(200, C, {}).p === 33);
+  check("log: 800 -> 50 + 25 x ln 2 / ln 4 = 62.5 -> 63", P(800).p === 63);
+  check("on a cutpoint: 100 -> the 25th", P(100).kind === "in" && P(100).p === 25);
+  check("below the lowest cutpoint is not extrapolated: 99 -> below the 25th", P(99).kind === "below" && P(99).p === 25 && P(0).kind === "below");
+  check("at the top cutpoint: 6400 -> top 10%, no number", P(6400).kind === "top" && P(6400).top === 10 && !P(6400).approx);
+  check("just under the top cutpoint stays under it: 6399 -> 89, never 90", P(6399).kind === "in" && P(6399).p === 89);
+  check("just under an inner cutpoint never shows its percentile: 399 -> 49, not 50", P(399).kind === "in" && P(399).p === 49);
+  // Zeros: P25 and P50 are 0, so $0 is "at least 50% have none", and a small balance is linear from (50, 0).
+  const Z = CF.cutsOf({ p25: 0, p50: 0, p75: 1000, p90: 4000 });
+  check("zero cutpoints: $0 -> zero, at least the 50th", P(0, Z).kind === "zero" && P(0, Z).p === 50);
+  check("from the highest zero cutpoint, linear: 500 of 1,000 -> 50 + 12.5 -> 63", P(500, Z).p === 63);
+  check("above zeros, log again: 2,000 between 1,000 and 4,000 -> 75 + 7.5 -> 83", P(2000, Z).p === 83);
+  check("a negative cutpoint interpolates linearly: 0 between -1,000 (P10) and 1,000 (P25) -> 18",
+    P(0, CF.cutsOf({ p10: -1000, p25: 1000 })).p === 18);
+  // A Pareto tail through P90 = 100 and P99 = 1000: alpha = 1, top share = 10% x (x / 100)^-1.
+  const T = CF.cutsOf({ p50: 10, p90: 100, p99: 1000 });
+  check("Pareto tail: 200 -> top ~5%, shown as approximate", P(200, T).kind === "top" && P(200, T).top === 5 && P(200, T).approx);
+  check("Pareto tail: 100 -> top ~10%; 1,000 and up -> top 1% (not approximate)",
+    P(100, T).top === 10 && P(1000, T).top === 1 && !P(1000, T).approx && P(5000, T).top === 1);
+  check("below P90 with a P99, ordinary interpolation: 50 -> 50 + 40 x ln 5 / ln 10 = 78", P(50, T).kind === "in" && P(50, T).p === 78);
+  check("no cutpoints or no number -> none", CF.percentileOf(5, []).kind === "none" && P(NaN).kind === "none");
+
+  // Fidelity: 1x at 30, 3x at 40, 6x at 50, 8x at 60, 10x at 67; linear between; nothing before 30.
+  const G = BENCH.fidelityGuide.points;
+  check("Fidelity guideline: 29 none, 30 1x, 35 2x, 42 3.6x, 63.5 9x, 67 10x, 80 10x",
+    CF.guidelineMultiple(G, 29) === null && CF.guidelineMultiple(G, 30) === 1 && near(CF.guidelineMultiple(G, 35), 2, 1e-12) &&
+    near(CF.guidelineMultiple(G, 42), 3.6, 1e-12) && near(CF.guidelineMultiple(G, 63.5), 9, 1e-12) &&
+    CF.guidelineMultiple(G, 67) === 10 && CF.guidelineMultiple(G, 80) === 10);
+  const TG = BENCH.savingRates.vanguard.target;
+  check("Vanguard's target by pay: 49,999 -> 9%, 50,000 and 100,000 -> 12%, 100,001 -> 15%",
+    CF.savingTarget(TG, 49999) === 9 && CF.savingTarget(TG, 50000) === 12 && CF.savingTarget(TG, 100000) === 12 && CF.savingTarget(TG, 100001) === 15);
+
+  // The defaults (two incomes of 62,608 at 42, 45,000 invested), each comparison by hand.
+  const F25 = CF.cpiFactor(BENCH, 2025), F24 = CF.cpiFactor(BENCH, 2024);
+  const D = CF.compare({}, BENCH);
+  check("defaults: a couple aged 42", D.couple === true && D.age === 42 && J(D.partners) === J(["A", "B"]));
+  // 1. 45,000 against 35-44: P50 31,300 and P75 163,000 (2025 dollars, x F25) -> 50 + 25 ln(45,000 / 31,300 F25) / ln(163,000 / 31,300) = 54.8.
+  const lnp = (x, a, b, pa, pb) => pa + (pb - pa) * Math.log(x / a) / Math.log(b / a);
+  eq("defaults, invested: the hand formula gives 54.8", lnp(45000, 31300 * F25, 163000 * F25, 50, 75), 54.8, 0.05);
+  check("defaults, invested: about the 55th percentile for 35-44", D.assets.r.kind === "in" && D.assets.r.p === 55 && J(D.assets.band) === J([35, 44]));
+  eq("defaults, invested: the median shown is 31,300 in today's dollars", D.assets.cuts[1].v, 31300 * F25, 1e-6);
+  check("defaults, invested: below the couples' median (58,300 x F25)", D.assets.couples.r.kind === "below" && D.assets.couples.r.p === 50 && near(D.assets.couples.cuts[0].v, 58300 * F25, 1e-6));
+  // 2. Couples 35-44 with none counted: P50 25,000, P75 163,000 -> 50 + 25 ln(45,000 / 25,000 F25) / ln(163,000 / 25,000) = 57.2.
+  eq("defaults, retirement: the hand formula gives 57.2", lnp(45000, 25000 * F25, 163000 * F25, 50, 75), 57.2, 0.05);
+  check("defaults, retirement: couples' cutpoints, about the 57th", D.retirement.group === "couples" && D.retirement.r.p === 57 && D.retirement.x === 45000);
+  check("defaults, retirement: 68.4% of couples hold one, median 80,000 in today's dollars",
+    D.retirement.holders.group === "couples" && D.retirement.holders.pct === 68.4 && near(D.retirement.holders.median, 80000 * F25, 1e-6));
+  // 3. (4,800 + 4.3% of 62,608) / 62,608 = 11.97%; with Roth and HSA about 22,784 / 125,216 = 18.20%.
+  eq("defaults, saving: 401(k) + employer = 11.97% of pay", D.saving.planRate, (4800 + 0.043 * 62608) / 62608 * 100, 1e-9);
+  eq("defaults, saving: everything = (2 x 4,800 + 8.6% of 62,608 + 2 x 3,200 + 1,400) / 125,216 = 18.20%", D.saving.totalRate,
+    (2 * 4800 + 0.086 * 62608 + 2 * 3200 + 1400) / 125216 * 100, 1e-9);
+  check("defaults, saving: 12% target for this pay, just missed; nobody maxes; 7.2% average deferral at 35-44",
+    D.saving.people.every((q) => q.target === 12 && !q.meets && !q.maxed) && !D.saving.anyMaxed && D.saving.ageDeferral === 7.2);
+  // 4. 125,216 between P60 110,300 and P80 182,400 (x F25) -> 60 + 20 ln(...) / ln(...) = 63.2.
+  eq("defaults, income: the hand formula gives 63.2", lnp(125216, 110300 * F25, 182400 * F25, 60, 80), 63.2, 0.05);
+  check("defaults, income: about the 63rd percentile; married-couple median 132,400 and age median 114,100 in today's dollars",
+    D.income.r.p === 63 && D.income.peer.kind === "married" && near(D.income.peer.median, 132400 * F25, 1e-6) && near(D.income.ageMedian, 114100 * F25, 1e-6));
+  // Each 62,608 against full-time workers 25+ (weekly x 52): P25 893 x 52, P50 1,330 x 52 -> 25 + 25 ln(...) / ln(1330 / 893) = 43.8.
+  eq("defaults, pay: the hand formula gives 43.8", lnp(62608, 893 * 52, 1330 * 52, 25, 50), 43.8, 0.05);
+  check("defaults, pay: each about the 44th; median for 35-44 is 74,910 in today's dollars; BLS figures not inflated",
+    D.income.people.every((q) => q.r.p === 44 && near(q.median, 74910 * F25, 1e-6)) && D.income.payCuts[2].v === 1330 * 52);
+  // 5. 45,000 / 125,216 = 0.36x against 3.6x at 42.
+  check("defaults, multiple: 0.36x against a 3.6x guideline", near(D.multiple.x, 45000 / 125216, 1e-12) && near(D.multiple.guide, 3.6, 1e-12));
+  // 6, 7.
+  check("defaults, retirement age: 65 against 65 expected and 62 actual", D.retAge.x === 65 && D.retAge.expected === 65 && D.retAge.actual === 62);
+  eq("defaults, spending: 65+ households spend 61,432 x F24 (2024 dollars inflated)", D.spending.all65, 61432 * F24, 1e-6);
+  eq("defaults, Social Security: 2,088.79 a month, not inflated, covers 35% of 71,000", D.spending.ssShare, 2088.79 * 12 / 71000, 1e-12);
+
+  // Couples vs single: one income compares with all households, the nonfamily median, and one person's pay.
+  const S1 = CF.compare({ two: 0 }, BENCH);
+  check("one income: no couples cut, all-household retirement cutpoints, 59.6% holders",
+    S1.couple === false && S1.assets.couples === null && S1.retirement.group === "all" && S1.retirement.holders.pct === 59.6);
+  check("one income: nonfamily median 52,200 in today's dollars, one person's pay only",
+    S1.income.peer.kind === "single" && near(S1.income.peer.median, 52200 * F25, 1e-6) && S1.income.x === 62608 && S1.income.people.length === 1);
+  // All families 35-44: P50 7,000, P75 95,000 -> 50 + 25 ln(45,000 / 7,000 F25) / ln(95,000 / 7,000) = 67.4.
+  check("one income: retirement accounts about the 67th of all families 35-44", S1.retirement.r.p === Math.round(lnp(45000, 7000 * F25, 95000 * F25, 50, 75)) && S1.retirement.r.p === 67);
+  const C70 = CF.compare({ age: 70, retAge: 75 }, BENCH);
+  check("a couple at 70: no couples-only spread, so all households (and says so); holders from couples",
+    C70.retirement.group === "all" && C70.retirement.couplesMissing && C70.retirement.holders.group === "couples");
+  const Y0 = CF.compare({ age: 27, assets: 0, two: 0 }, BENCH);
+  check("nothing invested at 27: below P25 of assets, none yet in retirement accounts", Y0.assets.r.kind === "below" && Y0.retirement.r.kind === "zero");
+  check("retirement accounts leave out Taxable + cash", CF.compare({ taxable: 20000 }, BENCH).retirement.x === 25000);
+  const MX = CF.compare({ kA: 24500 }, BENCH);
+  check("maxing the 401(k) meets the target whatever the rate", MX.saving.people[0].maxed && MX.saving.people[0].meets && MX.saving.anyMaxed);
+  const TEEN = CF.compare({ age: 16 }, BENCH);
+  check("under 18: no SCF comparison", TEEN.assets === null && TEEN.retirement === null);
+  check("no pay: no saving rate, multiple or income percentile", (() => { const z = CF.compare({ salA: 0, salB: 0 }, BENCH); return z.saving === null && z.multiple === null && z.income.r.kind === "below"; })());
+
+  // Words (ui.js).
+  check("ordinals", [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map(UI.ordinal).join() === "1st,2nd,3rd,4th,11th,12th,13th,21st,22nd,23rd,101st,111th");
+  check("age bands in words", UI.bandWords([18, 34]) === "under 35" && UI.bandWords([35, 44]) === "35–44" && UI.bandWords([75, 120]) === "75 and over");
+  check("a rate just under its target shows two decimals", UI.rateVs(11.967, 12) === "11.97%" && UI.rateVs(12.04, 12) === "12.0%" && UI.rateVs(11.4, 12) === "11.4%");
+  check("multiples", UI.mult(0) === "0×" && UI.mult(45000 / 125216) === "0.36×" && UI.mult(3.6) === "3.6×" && UI.mult(6) === "6×");
+  check("summary (defaults): ~55th percentile of households your age", UI.compareSummary(D) === "~55th percentile of households your age", UI.compareSummary(D));
+  check("summary: below, top, under 18", UI.compareSummary(Y0) === "below the 25th percentile of households your age" &&
+    UI.compareSummary(CF.compare({ assets: 2000000 }, BENCH)) === "top 10% of households your age" && UI.compareSummary(TEEN) === "for ages 18 and up");
+  const items = UI.compareItems(D, BENCH), byId = Object.fromEntries(items.map((x) => [x.id, x]));
+  check("seven comparisons, each with a title, value, sentence and a source with a link",
+    items.length === 7 && items.every((x) => x.title && x.value && x.line && x.sources.length && x.sources.every((q) => q.url && q.year)));
+  check("defaults, invested sentence", byId.assets.line === "Your $45K invested is about the 55th percentile for households aged 35–44, where the median is $32.8K.", byId.assets.line);
+  check("defaults, retirement value and holders line", byId.retire.value === "~57th percentile (couples)" &&
+    byId.retire.subs[0] === "Among the 68% of couples your age who have an account, the median is $83.7K.", byId.retire.subs[0]);
+  check("defaults, saving value and target line", byId.saving.value === "12.0% vs 11.6% typical" && byId.saving.subs.some((t) => t.endsWith("A and B each: 11.97%, a hair under the 12% target.")));
+  check("no 401(k) at all: not contributing yet", UI.compareItems(CF.compare({ kA: 0, kB: 0, empA: 0, empB: 0 }, BENCH), BENCH)[2].subs
+    .some((t) => t.endsWith("A and B each: not contributing yet (target 12%).")));
+  check("retirement accounts cite the SCF tables (share, median) and the public data (percentiles)",
+    J(byId.retire.sources.map((q) => q.label)) === J([BENCH.sources.scf_tables.label, BENCH.sources.scf_micro.label]));
+  check("household income cites Census Table 1 for the medians", byId.income.sources.some((q) => q.label === BENCH.sources.census_t1.label));
+  check("past 67 the guideline is 10x by 67, not a figure for that age", UI.compareItems(CF.compare({ age: 70, retAge: 75 }, BENCH), BENCH)[4].line
+    .endsWith("Fidelity's guideline is 10× by 67."));
+  check("retirement age: medians and CRR's labor-force ages in words", byId.retage.line.endsWith("retirees' median actual age was 62.") &&
+    byId.retage.subs.some((t) => t.includes("by about 64½ for men and 62½ for women, fewer than half still work")));
+  eq("spending without personal insurance and pensions: 57,952 x F24", D.spending.core65, 57952 * F24, 1e-6);
+  check("the $0 share for the strip: 51% of households under 35 have no account", near(Y0.retirement.noneShare, 51.2, 1e-9));
+  // One income at 42 with 1,000 in accounts: P25 = 0, but 40.4% hold none, so linear from (40.4, 0) to (50, 7,000 x F25) -> 41.7.
+  const R1 = CF.compare({ two: 0, assets: 1000 }, BENCH).retirement;
+  check("retirement accounts: a $0 cutpoint at the share with none (40.4% at 35-44); 1,000 -> 42nd",
+    near(R1.cuts[1].p, 40.4, 1e-9) && R1.cuts[1].v === 0 && R1.r.p === Math.round(40.4 + 9.6 * 1000 / (7000 * F25)) && R1.r.p === 42);
+  check("defaults, income: equal salaries read as one line", byId.income.subs[0].startsWith("A and B each earn $62.6K: about the 44th percentile"), byId.income.subs[0]);
+  check("defaults, multiple, retirement age and spending values", byId.multiple.value === "0.36× vs 3.6× guideline" &&
+    byId.retage.value === "65 vs 62 actual" && byId.spend.value === "$71K vs $66K at 65+", [byId.multiple.value, byId.retage.value, byId.spend.value].join(" | "));
+  check("defaults, Social Security line: one covers 35%, two 71%", byId.spend.subs[0].includes("would cover 35% of it; two would cover 71%"), byId.spend.subs[0]);
+  check("nothing in retirement accounts at 27: the share with none", UI.compareItems(Y0, BENCH)[1].line === "Like about 51% of households aged under 35, you don't have money in retirement accounts yet.");
+  check("before 60 adds Gallup's rarity line and its source", (() => { const it = UI.compareItems(CF.compare({ retAge: 55 }, BENCH), BENCH)[5];
+    return it.subs.some((t) => t.startsWith("Only about 12%")) && it.sources.some((q) => q.url.includes("snapshot-americans")); })());
+  check("the note says approximate and not advice", /approximate/.test(UI.COMPARE_NOTE) && /not financial advice/.test(UI.COMPARE_NOTE));
+}
+
 // ---------- privacy scan: no stray amounts, no spreadsheets ----------
 // Every concrete number must trace back to SPEC.md: cited defaults and their sources,
 // the 2026 limits, the test scenarios above, slider limits, and years.
@@ -1117,6 +1283,8 @@ const ALLOWED_NUMBERS = new Set([
   1234, 1300, 1850, 1900, 2500, 2600, 2750, 4300, 5250, 6650, 6700, 6750, 7000, 7350, 8100, 11600, 11650, 13500, 14500, 16600, 16750, 19050, 19100, 19500, 19700, 19900, 21650, 23250, 25000, 36500, 40300, 70900, 77500, 150000, 260000, 270000, 280000,
   // years (sources, the seed, the Trinity study)
   1998, 2022, 2023, 2024, 2025, 2026, 20261016,
+  // how you compare (SPEC 13): the percentile scenarios and the defaults' household pay
+  6400, 6399, 49999, 100001, 125216,
   // the tests' random-number generator
   1103515245, 12345, 2147483648,
 ]);
@@ -1136,7 +1304,20 @@ const ALLOWED = new Set([
   "$60,000", "$10,700",
   // SPEC 12 examples at the defaults with the home on (house at 45): the gap, its own FIRE number, the floored price
   "$1.42M", "$1.40M", "$46,000",
+  // how you compare (SPEC 13): the defaults' sentences in today's dollars
+  "$32.8K", "$83.7K", "$62.6K", "$71K", "$66K",
 ]);
+// benchmarks.js holds published survey figures (SPEC 13). Its numbers may appear in any file, but
+// each must also be written in SPEC.md (checked below), so nothing private can hide among them.
+const benchText = fs.readFileSync(path.join(ROOT, "benchmarks.js"), "utf8").replace(/https?:\/\/\S+/g, "");
+const BENCH_NUMBERS = new Set([...benchText.matchAll(/(?<![\w.$,])\d{4,}(?![\w])/g)].map((m) => Number(m[0])));
+// Only figures of 1,000 or more: small numbers (ages, rates, years' digits) would let "$50K" through.
+const BENCH_VALUES = new Set([...benchText.matchAll(/(?<![\w.])\d+(?:\.\d+)?/g)].map((m) => Number(m[0])).filter((n) => n >= 1000));
+// "$132,400", "$2,088.79", "$150K" -> the number, to look up among the published figures.
+const dollarValue = (t) => {
+  const m = t.replace(/[$,\s]/g, "").match(/^([\d.]+)([KMBT]?)$/);
+  return m ? Number(m[1]) * { "": 1, K: 1e3, M: 1e6, B: 1e9, T: 1e12 }[m[2]] : NaN;
+};
 let files;
 try {
   files = execSync("git ls-files --cached --others --exclude-standard", { cwd: ROOT, encoding: "utf8" })
@@ -1157,13 +1338,14 @@ function strayAmounts(f, text) {
   const out = [];
   // Dollar amounts in any form: with commas, without, or abbreviated (K, M, B, T)
   for (const m of text.matchAll(/\$\s?\d{1,3}(?:,\d{3})+(?:\.\d+)?|\$\d{4,}(?:\.\d+)?|\$\d+(?:\.\d+)?\s?[KMBT]\b/g)) {
-    if (!ALLOWED.has(m[0].replace(/\s/g, ""))) out.push(`${f}: ${m[0]}`);
+    if (!ALLOWED.has(m[0].replace(/\s/g, "")) && !BENCH_VALUES.has(dollarValue(m[0]))) out.push(`${f}: ${m[0]}`);
   }
   // Bare numbers of 4+ digits in code and pages (hex colors and URLs skipped), with or without commas.
   if (/\.(js|html)$/i.test(f)) {
     const plain = text.replace(/https?:\/\/\S+/g, "").replace(/#[0-9a-f]{3,8}\b/gi, "");
     for (const m of plain.matchAll(/(?<![\w.$,])\d{1,3}(?:,\d{3})+(?![\d])|(?<![\w.$,])\d{4,}(?![\w])/g)) {
-      if (!ALLOWED_NUMBERS.has(Number(m[0].replace(/,/g, "")))) out.push(`${f}: ${m[0]}`);
+      const n = Number(m[0].replace(/,/g, ""));
+      if (!ALLOWED_NUMBERS.has(n) && !BENCH_NUMBERS.has(n)) out.push(`${f}: ${m[0]}`);
     }
   }
   return out;
@@ -1192,6 +1374,10 @@ const written = (n) => [String(n), n.toLocaleString("en-US")].some((form) =>
 const untraced = [...ALLOWED_NUMBERS].filter((n) => !written(n))
   .concat([...ALLOWED].filter((a) => !traceText.includes(a) && !traceText.includes(a.replace(/^\$/, ""))));
 check("every allowlisted amount is written in SPEC.md or a test scenario", untraced.length === 0, untraced.join(", "));
+const specText = fs.readFileSync(path.join(ROOT, "SPEC.md"), "utf8");
+const benchUntraced = [...BENCH_NUMBERS].filter((n) => ![String(n), n.toLocaleString("en-US")].some((form) =>
+  new RegExp("(?<![\\d,])" + form + "(?!\\d|,\\d)").test(specText)));
+check(`every figure in benchmarks.js (${BENCH_NUMBERS.size}) is written in SPEC.md section 13`, benchUntraced.length === 0, benchUntraced.join(", "));
 
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -7,7 +7,7 @@
   --ink: #1d1c1a; --ink-2: #4f4b44; --muted: #6f6962;
   --line: #e4ded3; --grid: #ece7de; --base: #c9c2b5;
   --accent: #2f5bb8; --accent-ink: #24489a; --on-accent: #ffffff;
-  --accent-wash: rgba(47, 91, 184, .09); --accent-soft: #dfe7f6; --focus: rgba(47, 91, 184, .35);
+  --accent-wash: rgba(47, 91, 184, .09); --accent-soft: #dfe7f6; --strip: #c8d5ef; --focus: rgba(47, 91, 184, .35);
   --good: #2f7a4a; --good-wash: rgba(47, 122, 74, .11);
   --bad: #b3362c; --bad-fill: #c9483d; --bad-wash: rgba(179, 54, 44, .10);
   --warn: #8a5a00; --warn-wash: rgba(196, 140, 20, .15);
@@ -32,7 +32,7 @@
     --ink: #efebe3; --ink-2: #c4beb3; --muted: #948d82;
     --line: #34312c; --grid: #2a2824; --base: #4a463f;
     --accent: #5f88e0; --accent-ink: #9db8f2; --on-accent: #141311;
-    --accent-wash: rgba(95, 136, 224, .13); --accent-soft: #22304d; --focus: rgba(95, 136, 224, .45);
+    --accent-wash: rgba(95, 136, 224, .13); --accent-soft: #22304d; --strip: #22304d; --focus: rgba(95, 136, 224, .45);
     --good: #6cc28d; --good-wash: rgba(108, 194, 141, .14);
     --bad: #ec8a7c; --bad-fill: #e0705f; --bad-wash: rgba(236, 138, 124, .15);
     --warn: #e3b25a; --warn-wash: rgba(227, 178, 90, .13);
@@ -48,7 +48,7 @@
   --ink: #efebe3; --ink-2: #c4beb3; --muted: #948d82;
   --line: #34312c; --grid: #2a2824; --base: #4a463f;
   --accent: #5f88e0; --accent-ink: #9db8f2; --on-accent: #141311;
-  --accent-wash: rgba(95, 136, 224, .13); --accent-soft: #22304d; --focus: rgba(95, 136, 224, .45);
+  --accent-wash: rgba(95, 136, 224, .13); --accent-soft: #22304d; --strip: #22304d; --focus: rgba(95, 136, 224, .45);
   --good: #6cc28d; --good-wash: rgba(108, 194, 141, .14);
   --bad: #ec8a7c; --bad-fill: #e0705f; --bad-wash: rgba(236, 138, 124, .15);
   --warn: #e3b25a; --warn-wash: rgba(227, 178, 90, .13);
@@ -632,6 +632,32 @@ details.more summary { cursor: pointer; font-size: 13px; font-weight: 650; paddi
 .sources { padding-left: 18px; }
 .sources li { margin-bottom: 6px; }
 
+/* ===== How you compare (SPEC 13): one closed row at the bottom; inside, a row per comparison ===== */
+.compare-g { margin-top: 26px; min-width: 0; }
+.compare-g > details.dis { border-bottom: 1px solid var(--line); }
+.cmp-intro { margin: 0 0 6px; }
+.cmp-list > details.dis:last-child { border-bottom: 1px solid var(--line); }
+.cmp { padding-top: 0; }
+.cmp-line { font-size: 14px; line-height: 1.45; color: var(--ink); margin: 0 0 8px; }
+.cmp-viz { display: block; width: 100%; overflow: visible; margin: 2px 0 8px; }
+.cmp-subs { margin: 0; padding-left: 16px; font-size: 13px; line-height: 1.4; color: var(--ink-2); }
+.cmp-subs li { margin-bottom: 5px; }
+.cmp-src { margin-top: 6px; overflow-wrap: anywhere; }
+.cmp-src a { color: var(--muted); }
+.cmp-note { margin-top: 12px; }
+.compare-g .halo { stroke: var(--bg); }
+.compare-g .dot-proj, .compare-g .dot-coast { stroke: var(--bg); }
+.tick.strong { font-weight: 650; fill: var(--ink-2); }
+.strip-out { stroke: var(--base); stroke-width: 1; stroke-dasharray: 2 3; }
+.strip-in { stroke: var(--strip); stroke-width: 8; stroke-linecap: round; }
+.strip-zero { stroke: var(--base); stroke-width: 8; stroke-linecap: round; }
+.strip-tick { stroke: var(--ink-2); stroke-width: 1.25; }
+.dot-open { fill: var(--bg); stroke: var(--accent); stroke-width: 2; }
+.dot-open.guide { stroke: var(--ink-2); stroke-width: 1.5; }
+.bar-you { fill: var(--accent); }
+.bar-ref { fill: var(--tax); }
+.bar-ss { fill: var(--c2); }
+
 /* ===== Toast, bottom bar, footer ===== */
 .toast {
   position: fixed; z-index: 6; left: 50%; transform: translateX(-50%); bottom: max(12px, env(safe-area-inset-bottom));
@@ -669,6 +695,9 @@ details.more summary { cursor: pointer; font-size: 13px; font-weight: 650; paddi
   .col-more { grid-area: more; min-width: 0; }
   .col-inputs { grid-area: inputs; min-width: 0; }
   .col-inputs > .group:first-child { margin-top: 10px; }
+  /* Same columns as the layout above, so the section lines up under the results. */
+  .compare-g { display: grid; grid-template-columns: minmax(340px, 400px) 1fr; gap: 0 18px; margin-top: 32px; }
+  .compare-g > details.dis { grid-column: 2; min-width: 0; }
   .deeper-h { margin-top: 28px; }
   .chart { height: 320px; }
   .peek { display: none !important; }

@@ -354,12 +354,54 @@
   </div>
 </main>
 
+<!-- ===== How you compare (SPEC 13): published US benchmarks, at the bottom ===== -->
+<section class="compare-g" id="compare-g" aria-label="How you compare">
+  <details class="dis" id="d-compare">
+    <summary class="sum"><span class="sum-t">How you compare</span><span class="sum-v" id="sv-compare"></span></summary>
+    <div class="dis-body">
+      <p class="fine cmp-intro">Your numbers next to published US surveys of people your age. Worked out on this device; nothing is sent.</p>
+      <div class="cmp-list">
+      <details class="dis sub" id="d-cmp-assets">
+        <summary class="sum"><span class="sum-t">Invested assets</span><span class="sum-v" id="cv-assets"></span></summary>
+        <div class="dis-body cmp" id="cb-assets"></div>
+      </details>
+      <details class="dis sub" id="d-cmp-retire">
+        <summary class="sum"><span class="sum-t">Retirement accounts</span><span class="sum-v" id="cv-retire"></span></summary>
+        <div class="dis-body cmp" id="cb-retire"></div>
+      </details>
+      <details class="dis sub" id="d-cmp-saving">
+        <summary class="sum"><span class="sum-t">Saving rate</span><span class="sum-v" id="cv-saving"></span></summary>
+        <div class="dis-body cmp" id="cb-saving"></div>
+      </details>
+      <details class="dis sub" id="d-cmp-income">
+        <summary class="sum"><span class="sum-t">Household income</span><span class="sum-v" id="cv-income"></span></summary>
+        <div class="dis-body cmp" id="cb-income"></div>
+      </details>
+      <details class="dis sub" id="d-cmp-multiple">
+        <summary class="sum"><span class="sum-t">Savings vs. pay</span><span class="sum-v" id="cv-multiple"></span></summary>
+        <div class="dis-body cmp" id="cb-multiple"></div>
+      </details>
+      <details class="dis sub" id="d-cmp-retage">
+        <summary class="sum"><span class="sum-t">Retirement age</span><span class="sum-v" id="cv-retage"></span></summary>
+        <div class="dis-body cmp" id="cb-retage"></div>
+      </details>
+      <details class="dis sub" id="d-cmp-spend">
+        <summary class="sum"><span class="sum-t">Retirement spending</span><span class="sum-v" id="cv-spend"></span></summary>
+        <div class="dis-body cmp" id="cb-spend"></div>
+      </details>
+      </div>
+      <p class="fine cmp-note" id="cmp-note"></p>
+    </div>
+  </details>
+</section>
+
 <p class="foot fine">Everything you type stays in this browser. Nothing is sent anywhere. <a href="privacy.html">Privacy</a></p>
 </div>
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 <button type="button" id="peek" class="peek" hidden aria-label="Jump to the result"></button>
 
+<script src="benchmarks.js"></script>
 <script src="calc.js"></script>
 <script src="ui.js"></script>
 <script src="app.js"></script>

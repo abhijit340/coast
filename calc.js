@@ -1486,6 +1486,172 @@
     return out;
   }
 
+  // ---------- how you compare (SPEC 13) ----------
+  // The data is benchmarks.js (window.CoastBench), passed in, so these stay pure. All dollar
+  // results are in today's dollars: a series in an older year's dollars is inflated by CPI-U
+  // (stored, never fetched). Rates, ages and current-dollar figures are left as published.
+
+  /** Today's dollars per dollar of `year`: CPI-U target month / that year's annual average. 1 for null or an unlisted year. */
+  function cpiFactor(bench, year) {
+    const avg = year === null || year === undefined ? 0 : bench.cpi.annual[year];
+    return avg > 0 ? bench.cpi.target.value / avg : 1;
+  }
+
+  /** The row of `bands` whose [min, max] age range holds `age`, or null. */
+  function bandOf(bands, age) { return (bands || []).find((b) => age >= b.age[0] && age <= b.age[1]) || null; }
+
+  /** {p25: v, p50: v, ...} -> [{p: 25, v}, ...] by percentile, each value times `scale`. Means and other keys are ignored. */
+  function cutsOf(obj, scale) {
+    const s = scale === undefined ? 1 : scale;
+    return Object.keys(obj || {}).filter((k) => /^p\d+$/.test(k))
+      .map((k) => ({ p: +k.slice(1), v: obj[k] * s })).sort((a, b) => a.p - b.p);
+  }
+
+  /**
+   * Where `x` falls among published percentile cutpoints [{p, v}] (SPEC 13.2). Nothing is
+   * extrapolated past the published points, and a mean is never a cutpoint.
+   *  - between two cutpoints: interpolated, log-linear when `opts.log` and the lower cutpoint is
+   *    above 0 (dollars), otherwise linear (rates; a lower cutpoint of 0); a whole percentile.
+   *  - below the lowest: { kind: "below", p: that percentile }.
+   *  - x = 0 with cutpoints of 0 up to P: { kind: "zero", p: P } (at least P% have none).
+   *  - at or above the highest: { kind: "top", top: 100 - its p }. With P90 and P99 both published,
+   *    a Pareto tail through them, alpha = ln 10 / ln(v99 / v90), top share = 10% (x / v90)^-alpha,
+   *    gives a rough share between them ({ approx: true }, shown only as "top ~X%").
+   */
+  function percentileOf(x, cuts, opts) {
+    const o = opts || {}, n = cuts ? cuts.length : 0;
+    const res = (kind, p, top, approx) => ({ kind, p, top, approx: !!approx });
+    if (!n || !Number.isFinite(x)) return res("none", null, null);
+    if (x < cuts[0].v) return res("below", cuts[0].p, null);
+    let i = 0;
+    for (let j = 0; j < n; j++) if (cuts[j].v <= x) i = j; // the highest cutpoint at or below x
+    if (x === 0 && cuts[i].v === 0) return res("zero", cuts[i].p, null);
+    const c90 = cuts.find((c) => c.p === 90), c99 = cuts.find((c) => c.p === 99);
+    if (c90 && c99 && c90.v > 0 && c99.v > c90.v && x >= c90.v) {
+      if (x >= c99.v) return res("top", 99, 1);
+      const alpha = Math.log(10) / Math.log(c99.v / c90.v);
+      const share = 10 * Math.pow(x / c90.v, -alpha);
+      return res("top", 90, Math.min(10, Math.max(1, Math.round(share))), true);
+    }
+    const last = cuts[n - 1];
+    if (i === n - 1) return res("top", last.p, 100 - last.p);
+    const a = cuts[i], b = cuts[i + 1];
+    const t = o.log && a.v > 0 ? Math.log(x / a.v) / Math.log(b.v / a.v) : (x - a.v) / (b.v - a.v);
+    return res("in", Math.min(Math.round(a.p + (b.p - a.p) * t), b.p - 1), null); // x < b.v: never b's own p
+  }
+
+  /** Fidelity's multiple of salary at `age`, linear between its ages; null before the first (not extrapolated), the last multiple after the last. */
+  function guidelineMultiple(points, age) {
+    if (!points || !points.length || !(age >= points[0][0])) return null;
+    for (let j = 1; j < points.length; j++) {
+      const [a0, m0] = points[j - 1], [a1, m1] = points[j];
+      if (age <= a1) return m0 + (m1 - m0) * (age - a0) / (a1 - a0);
+    }
+    return points[points.length - 1][1];
+  }
+
+  /** Vanguard's income-based saving target (% of pay, employee + employer) for one person's pay. */
+  function savingTarget(t, pay) { return pay < t.under ? t.rates[0] : pay <= t.over ? t.rates[1] : t.rates[2]; }
+
+  /**
+   * The seven comparisons with the average American (SPEC 13). The household's age is the
+   * survey's reference-person age; two incomes count as a couple, one as a single person.
+   * Each part is null when it doesn't apply (no survey band for the age, no pay).
+   */
+  function compare(inputs, bench) {
+    const v = sanitize(inputs).values, B = bench, age = v.age, couple = !!v.two, ps = partners(v);
+    const LOG = { log: true };
+    const sum = (f) => ps.reduce((s, p) => s + f(p), 0);
+    const pay = sum((p) => v["sal" + p]);
+    const out = { age, couple, partners: ps.slice() };
+
+    // 1. Invested assets vs SCF financial assets, all families the same age (couples alongside).
+    const FA = B.financialAssets, fFA = cpiFactor(B, FA.dollars);
+    const fb = bandOf(FA.bands, age), fcb = couple ? bandOf(FA.couples, age) : null;
+    out.assets = fb && {
+      x: v.assets, band: fb.age, cuts: cutsOf(fb, fFA), year: FA.year, src: FA.src, factor: fFA,
+      couples: fcb ? { cuts: cutsOf(fcb, fFA) } : null,
+    };
+    if (out.assets) {
+      out.assets.r = percentileOf(v.assets, out.assets.cuts, LOG);
+      if (out.assets.couples) out.assets.couples.r = percentileOf(v.assets, out.assets.couples.cuts, LOG);
+    }
+
+    // 2. Retirement accounts (invested minus Taxable + cash) vs SCF, people with no account counted.
+    const RA = B.retirementAccounts, fRA = cpiFactor(B, RA.dollars);
+    const rb = bandOf(RA.bands, age), rcb = couple ? bandOf(RA.couples, age) : null;
+    if (rb) {
+      const useC = !!(rcb && rcb.uncond), row = useC ? rcb : rb, held = rcb || rb;
+      const x = Math.max(0, v.assets - (v.taxable || 0));
+      const cuts = cutsOf(row.uncond, fRA), none = 100 - row.holding, k = cuts.findIndex((c) => c.v > 0);
+      // Zero cutpoints say only "at least P% have none"; the published share holding one says how many.
+      if (k > 0 && none > cuts[k - 1].p && none < cuts[k].p) cuts.splice(k, 0, { p: none, v: 0 });
+      out.retirement = {
+        x, band: rb.age, group: useC ? "couples" : "all", couplesMissing: couple && !useC, noneShare: none,
+        cuts, r: percentileOf(x, cuts, LOG), year: RA.year, src: RA.src, factor: fRA,
+        holders: { group: rcb ? "couples" : "all", pct: held.holding, median: held.condMedian * fRA },
+      };
+    } else out.retirement = null;
+
+    // 3. Saving rate: 401(k) + employer as % of pay, vs Vanguard and Fidelity plan savers.
+    const VG = B.savingRates.vanguard, FD = B.savingRates.fidelity;
+    if (pay > 0) {
+      const people = ps.map((p) => {
+        const s = v["sal" + p], k = v["k" + p], e = s * v["emp" + p] / 100;
+        const maxed = k >= LIMITS.k401 - 0.5, target = savingTarget(VG.target, s);
+        const rate = s > 0 ? (k + e) / s * 100 : null;
+        return { p, pay: s, rate, deferral: s > 0 ? k / s * 100 : null, target, maxed, meets: s > 0 && (maxed || rate >= target - 1e-9) };
+      });
+      const plan = sum((p) => v["k" + p] + v["sal" + p] * v["emp" + p] / 100);
+      const all = plan + sum((p) => v["roth" + p]) + v.hsa + (v.taxSave || 0);
+      const ab = bandOf(VG.deferralByAge, age), mb = bandOf(VG.atMaxByAge, age);
+      out.saving = {
+        pay, planRate: plan / pay * 100, totalRate: all / pay * 100, deferral: sum((p) => v["k" + p]) / pay * 100,
+        ageDeferral: ab ? ab.mean : null, ageBand: ab ? ab.age : null, people,
+        anyMaxed: people.some((q) => q.maxed), atMax: VG.atMax, atMaxAge: mb ? mb.pct : null, atMaxHighPay: VG.atMaxHighPay,
+        vanguard: { mean: VG.total.mean, median: VG.total.median, inclZero: VG.totalInclNonParticipants, year: VG.year, src: VG.src },
+        fidelity: { total: FD.total, year: FD.year, src: FD.src }, target: VG.target,
+      };
+    } else out.saving = null;
+
+    // 4. Household pay vs Census household income; each person's pay vs full-time workers.
+    const HI = B.householdIncome, fHI = cpiFactor(B, HI.dollars);
+    const ladder = cutsOf(HI.all, fHI), hb = bandOf(HI.byAge, age);
+    const FT = B.earnings.ftyr, fFT = cpiFactor(B, FT.dollars), BW = B.earnings.blsWeekly;
+    const wk = age >= 25 ? BW.age25plus : BW.age16plus, payCuts = cutsOf(wk, BW.weeks), ftb = bandOf(FT.byAge, age);
+    out.income = {
+      x: pay, cuts: ladder, r: percentileOf(pay, ladder, LOG), year: HI.year, src: HI.src, factor: fHI,
+      peer: couple ? { kind: "married", median: HI.marriedCouple * fHI } : { kind: "single", median: HI.nonfamily * fHI },
+      ageMedian: hb ? hb.median * fHI : null, ageBand: hb ? hb.age : null,
+      people: ps.map((p) => {
+        const s = v["sal" + p];
+        return { p, pay: s, median: ftb ? ftb.median * fFT : null, band: ftb ? ftb.age : null, r: s > 0 ? percentileOf(s, payCuts, LOG) : null };
+      }),
+      payCuts, payGroup: age >= 25 ? "25+" : "16+", payYear: BW.period, ftyrYear: FT.year, srcMedians: HI.srcMedians,
+    };
+
+    // 5. Savings as a multiple of pay vs Fidelity's guideline for the age.
+    const FG = B.fidelityGuide;
+    out.multiple = pay > 0 ? { x: v.assets / pay, assets: v.assets, pay, age, guide: guidelineMultiple(FG.points, age), points: FG.points, past: age > FG.points[FG.points.length - 1][0], src: FG.src } : null;
+
+    // 6. Planned retirement age vs what workers expect and what retirees did.
+    const RT = B.retirementAge;
+    out.retAge = {
+      x: v.retAge, expected: RT.ebri.expectedMedian, actual: RT.ebri.actualMedian, earlier: RT.ebri.earlierThanPlanned,
+      health: RT.ebri.healthReason, gallup: RT.gallup, before60: RT.gallupBefore60.pct, crr: RT.crr, year: RT.ebri.year, src: RT.ebri.src,
+    };
+
+    // 7. Retirement spending vs households headed by someone 65+, and one average Social Security benefit.
+    const SP = B.spending, fSP = cpiFactor(B, SP.dollars), SS = B.socialSecurity;
+    const ss = SS.avgRetiredWorkerMonthly * 12;
+    out.spending = {
+      x: v.spend, all65: SP.age65plus * fSP, core65: SP.age65plusCore * fSP, a6574: SP.age65to74 * fSP, a75: SP.age75plus * fSP, people: SP.people65plus,
+      ssMonthly: SS.avgRetiredWorkerMonthly, ssYear: ss, ssShare: v.spend > 0 ? ss / v.spend : null,
+      year: SP.year, src: SP.src, factor: fSP, ssPeriod: SS.period, ssSrc: SS.src,
+    };
+    return out;
+  }
+
   // ---------- sliders ----------
 
   const SLIDER_STEPS = 1000;
@@ -1585,6 +1751,7 @@
     PMI_END, mortgagePayment, loanBalance, homeTerms, buyPath, firstReach, fiBuy, house,
     YEAR_EFFORT, COMBO_TAU, LEVER_ORDER, goalOf, goalPlan, houseApplies, measure, margin, bisect, scanAge,
     allocate, unallocate, suggest,
+    cpiFactor, bandOf, cutsOf, percentileOf, guidelineMultiple, savingTarget, compare,
     fmtMoney, fmtCompact, encodeHash, decodeHash, sliderToValue, valueToSlider, niceRound,
   };
   root.CoastFire = api;

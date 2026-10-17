@@ -15,9 +15,10 @@ Nothing the user types leaves the device. A test fails on any dollar amount not 
 
 - Plain static HTML + CSS + vanilla JS. No build step, frameworks, CDN, external fonts or analytics.
 - Files: `index.html`, `style.css`, `calc.js` (pure math, UMD: `window.CoastFire` / `module.exports`),
+  `benchmarks.js` (published US survey figures for "How you compare", data only, `window.CoastBench`; section 13),
   `ui.js` (pure: the summary line of each collapsed section and the saved open/closed state, tested in
   node), `app.js` (DOM, SVG charts, storage), `sw.js` (network-first, cached fallback after 3 s; cache
-  `coast-fire-v8`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
+  `coast-fire-v9`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
   `tests/run_tests.js`, `README.md`, `SPEC.md`.
 - Mobile-first at 375px: one column, max-width 420px, 16px gutters plus safe-area insets, no
   horizontal scroll. At 860px and up: inputs on the left (340–400px), results on the right.
@@ -387,6 +388,7 @@ Hand-checked with a 0% real return (nominal = inflation) so every value adds up 
   allowlist of figures in this file), plus a check that every allowlist entry is written in this
   file or a test scenario.
 - Suggestions: the cases in section 12.7.
+- How you compare: the cases in section 13.7.
 
 ## 10. Out of scope
 
@@ -884,6 +886,167 @@ On the section 9 fixture (0% real, 28,000/yr, 380,000 at 50, SWR 5%):
   score and carries both parts' flags; the on-track withdrawal-rate wording ("as low as"); the
   buying scenario named in the status and hero line; goal 3 in one-decimal ages.
 
+## 13. How you compare (the average American)
+
+*"How do we stack up?"* One closed row at the very bottom of the page, after Go deeper and above the
+footer (on wide screens it sits under the results column, in the same grid). Its summary is live:
+**How you compare · ~55th percentile of households your age** (invested assets against all households
+the same age, named because a couple's rows also show couples; "below the 25th percentile of
+households your age", "top 10% of households your age", or "for ages 18 and up").
+Inside: one line saying the numbers are worked out on this device, then seven nested rows, each with
+its own live value, and the general note. Opened, a row shows one plain sentence, one compact chart,
+two to four smaller lines and its sources (data year and a link). "Invested assets" starts open;
+open/closed is remembered like every other row. Charts are drawn when their row is open. Nothing is
+fetched: the figures ship in `benchmarks.js`. Net worth is not compared (the app doesn't ask for
+home equity or debts, so it would overstate the gap).
+
+### 13.1 Who is compared
+
+- **Age** = the household's current age, used as the survey's reference person / householder, and
+  for both partners' pay comparisons (the app asks one age).
+- **Couple or single:** two incomes count as a couple (the SCF's couples include unmarried partners
+  living together; Census married-couple households include one-earner couples); one income as a
+  single person (the Census nonfamily-household median is the single proxy).
+- **Invested assets** = `assets`. **Retirement accounts** = `assets − taxable` (Taxable + cash, a
+  bridge input), floored at 0; the SCF measure leaves out HSAs. **Pay** = each salary, summed.
+  **401(k) rate** = (401(k) + employer) / pay; **total rate** adds Roth IRAs, the HSA and other investing.
+
+### 13.2 Percentiles (calc.js `percentileOf`)
+
+Given the published cutpoints (p, v) for the band, in order:
+- Between two cutpoints v_i ≤ x < v_i+1: log-linear for dollars, p = p_i + (p_i+1 − p_i) · ln(x / v_i) /
+  ln(v_i+1 / v_i); linear when v_i ≤ 0 (or for rates). Rounded to a whole percentile, and never up
+  to the next cutpoint's own p (6399 against a 6400 P90 is the 89th; 399 against a 400 P50 the 49th).
+- Below the lowest cutpoint: "below the Pth" (not extrapolated). When the cutpoints are 0 up to P and
+  x = 0: "none yet" with the share that has none (100 − % holding). Retirement accounts add a $0
+  cutpoint at that published share when it lies above the zero cutpoints (35–44: P25 = 0, 40.4% hold
+  none, so (40.4, 0)). A positive balance above zero cutpoints interpolates linearly from the highest
+  zero cutpoint.
+- At or above the highest: "top (100 − p)%", no number. With P90 and P99 both published, a Pareto
+  tail α = ln 10 / ln(v99 / v90), top share = 10% · (x / v90)^−α, shown only as "top ~X%" (clamped
+  1–10; at or above P99, "top 1%"). No series used today has a P99; the rule is implemented and tested.
+- Means are never cutpoints. Couples' financial assets have only P50 and P90, so the couples line
+  says "below their median", "at about their Nth percentile" or "in their top 10%".
+
+### 13.3 Today's dollars
+
+today = value × CPI(target) / CPI(dollars year, annual average), CPI-U NSA (BLS CUUR0000SA0), target
+Sep 2026 = 336.940; annual averages 2022 292.655, 2023 304.702, 2024 313.689, 2025 321.943 (factors
+1.1513, 1.1058, 1.0741, 1.0466). SCF 2025 and Census 2025 figures × 2025's factor; BLS CE 2024 ×
+2024's. Not inflated: Vanguard and Fidelity rates, Fidelity's multiples, BLS Q2 2026 weekly
+earnings, SSA Sep 2026, ages and percentages. The CPI values are stored, not fetched (the page makes
+no requests); refresh them with the data. A percentile comes out the same whether the cutpoints are
+inflated or the input deflated; the page shows today's dollars like everything else.
+
+### 13.4 The seven comparisons
+
+| Row | Value (closed) | Compared with | Chart |
+|---|---|---|---|
+| Invested assets | "~55th percentile" | SCF 2025 financial assets, all families in the age band, zeros included (P25–P90); couples' P50 and P90 in a line under it | percentile strip |
+| Retirement accounts | "~57th percentile (couples)" | SCF retirement accounts counting families with none: couples' P50–P90 for a couple (all families past 64, said so), else all families' P25–P90; "Among the N% … who have an account, the median is $X" (sources: the SCF tables for the share and median, the public data for the percentiles) | percentile strip; a run of $0 cutpoints is one grey segment from P0 labelled "$0 / 51% of households" (100 − % holding), and a $0 dot sits on it |
+| Saving rate | "12.0% vs 11.6% typical" | Vanguard 2025 employee + employer median 11.6, mean 12.1 (10.2 counting non-participants); Fidelity Q2 2026 average 14.4; Vanguard's average deferral by age; its income-based target, a total of employee + employer (9% under 50,000 of pay, 12% to 100,000, 15% above, or at the 401(k) maximum; 51% meet it) per person, with two decimals when one would hide the side ("11.97%, a hair under the 12% target"; "not contributing yet (target 12%)" at 0); if anyone maxes the 401(k): 14% of savers do (by age; 51% of those paid 150,000 or more) | value axis 0–16%+ with Vanguard and Fidelity ticks |
+| Household income | "~63rd percentile" | Census all-household ladder P10–P95; married-couple or nonfamily median and householder-age median (Table 1, linked); each person's pay against BLS full-time wage and salary weekly earnings ×52 (P10–P90, ages 25+ or 16+) and the Census full-time, year-round median for the age | percentile strip (P10, median, P90 labelled; every cutpoint ticked) |
+| Savings vs. pay | "0.36× vs 3.6× guideline" | all invested money (taxable and cash included, said so; Fidelity counts savings meant for retirement) ÷ pay against Fidelity: 1× by 30, 3× by 40, 6× by 50, 8× by 60, 10× by 67, linear between; before 30 "guideline from 30", after 67 10× worded "10× by 67" (no figure for later ages); labelled a guideline, not an average | the guideline line by age with your dot |
+| Retirement age | "65 vs 62 actual" | EBRI 2026: workers' median expected 65, retirees' median actual 62, 46% retired earlier than planned, health top reason 41%; Gallup 2022 averages 66 / 61; CRR labor-force ages 64.6 men, 62.6 women (the age where participation drops below half, shown "about 64½"); before 60: only about 12% of non-retirees expect that (Gallup 2018) | age axis with the two EBRI ticks, ends rounded to 5 |
+| Retirement spending | "$71K vs $66K at 65+" | BLS CE 2024, households headed by someone 65+ (mean, 1.8 people), 65–74 and 75+, and the 65+ total without personal insurance and pensions; one average Social Security retired-worker benefit (Sep 2026, $2,088.79/mo) and the share of your spending it (or two) would cover | bars from 0: you, all 65+, 65–74, 75+, one benefit |
+
+Strip: the 0–100 percentile axis, solid between the published cutpoints and dashed outside them
+(nothing is known there), a tick for each cutpoint with its value and "P25"/"median"/"P90" under it
+(a label too close to the last one is dropped, its tick kept), and your dot with "You ~55th" above.
+Below or above the published range the dot is hollow and sits in that zone ("You: below P25", "You:
+top 10%"); with the Pareto estimate it is filled at 100 − X. Colors: accent dot, `--strip` band (a
+little stronger than accent-soft in light mode), `--base` for a $0 segment,
+ink ticks; spending bars accent (you), `--tax` (surveys), `--c2` (Social Security); halos and dot
+outlines use the page background. Every chart has an aria-label (the sentence); "~" is read "about".
+
+General note under the rows: public survey data (Federal Reserve SCF 2025, Census CPS 2026, BLS,
+Vanguard, Fidelity, EBRI, SSA); today's dollars via CPI-U to September 2026; percentiles estimated
+between published points, approximate; the couple/single rule; "For context only, not financial
+advice." Per-row caveats: SCF financial assets include cash and the emergency fund (you may rank a
+little higher); the SCF leaves out HSAs; Vanguard/Fidelity cover their own plans' participants, not
+all Americans; Fidelity's multiples assume retiring at 67; survey retirement ages; mean spending
+raised for inflation.
+
+### 13.5 The figures (`benchmarks.js`, compiled 2026-10-17)
+
+Each series carries its data year, its dollars year (or none) and a source key. Every 4+ digit
+number in the file is written below (a test fails otherwise).
+
+**SCF 2025 financial assets**, all families by age, P25 / P50 / P75 / P90 (2025 dollars; computed from
+the public data, zeros included): under 35: 1,520 / 12,100 / 54,500 / 163,981 · 35–44: 3,000 / 31,300
+/ 163,000 / 579,800 · 45–54: 5,300 / 73,500 / 410,000 / 1,141,000 · 55–64: 3,600 / 87,020 / 664,900 /
+1,950,000 · 65–74: 5,000 / 80,600 / 523,000 / 2,037,600 · 75+: 4,290 / 96,000 / 711,900 / 2,426,000.
+Couples P50 / P90: under 35: 20,001 / 245,120 · 35–44: 58,300 / 789,770 · 45–54: 141,510 / 2,150,100 ·
+55–64: 310,300 / 4,172,500 · 65–74: 195,000 / 3,190,500 · 75+: 259,800 / 3,917,600.
+
+**SCF 2025 retirement accounts** (IRA/Keogh, 401(k)-type, account-type pensions): % holding, median
+among holders, and P25 / P50 / P75 / P90 counting families with none. All families: under 35: 48.8%,
+21,000; 0 / 0 / 19,000 / 75,000 · 35–44: 59.6%, 61,200; 0 / 7,000 / 95,000 / 326,000 · 45–54: 63.0%,
+133,000; 0 / 37,000 / 202,000 / 713,000 · 55–64: 63.1%, 239,000; 0 / 45,000 / 400,000 / 1,260,000 ·
+65–74: 49.0%, 257,000; 0 / 0 / 251,000 / 1,175,000 · 75+: 44.6%, 257,000; 0 / 0 / 175,000 / 1,125,000.
+Couples (% holding, median among holders, P50 / P75 / P90): under 35: 57.7%, 30,500; 3,300 / 35,000 /
+109,000 · 35–44: 68.4%, 80,000; 25,000 / 163,000 / 460,000 · 45–54: 74.5%, 200,000; 98,000 / 404,000 /
+1,057,000 · 55–64: 74.6%, 377,000; 140,000 / 700,000 / 1,850,000 · 65–74: 61.1%, 300,000 (no spread) ·
+75+: 57.2%, 436,000 (no spread).
+
+**Saving rates.** Vanguard *How America Saves 2026* (2025): total 12.1 mean, 11.6 median; 10.2 counting
+eligible non-participants; deferral 7.6 mean, 6.6 median; deferral by age 5.5 (18–24), 6.7, 7.2, 7.9,
+9.3, 10.1 (65+); at the 402(g) limit 14% (by age 2, 10, 15, 17, 19, 18; 51% of those paid 150,000 or
+more); income-based targets 9 / 12 / 15% at pay under 50,000 / to 100,000 / above, met by 51%.
+Fidelity Q2 2026: 14.4 total (9.6 employee, 4.8 employer).
+
+**Census CPS ASEC 2026 (2025 income, 2025 dollars).** All households P10 20,010 · P20 35,800 · P40 68,600
+· P50 87,460 · P60 110,300 · P80 182,400 · P90 261,300 · P95 354,000. Median by householder age: under
+25 60,870 · 25–34 94,880 · 35–44 114,100 · 45–54 120,100 · 55–64 99,320 · 65–74 68,800 · 75+ 50,880.
+Married-couple households 132,400; nonfamily households 52,200. Full-time, year-round median
+earnings by age: 15–24 40,580 · 25–34 61,020 · 35–44 74,910 · 45–54 75,500 · 55–64 71,500 · 65+ 68,240.
+
+**BLS usual weekly earnings, Q2 2026** (full-time wage and salary, × 52): 16+ P10 642 · P25 850 · P50
+1,251 · P75 1,915 · P90 2,924; 25+ P10 671 · P25 893 · P50 1,330 · P75 2,004 · P90 3,082.
+
+**Fidelity guideline** (2026-07-10): 1× at 30, 3× at 40, 6× at 50, 8× at 60, 10× at 67.
+
+**Retirement ages:** EBRI RCS 2026 65 expected / 62 actual, 46% earlier than planned, 41% health;
+Gallup 2022 66 / 61; Gallup 2018 12% expect before 60; CRR (2024) 64.6 men / 62.6 women.
+
+**Spending:** BLS CE 2024 (2024 dollars), 65+ 61,432 (1.8 people; 57,952 without personal insurance
+and pensions), 65–74 65,354, 75+ 55,834.
+**Social Security:** average retired-worker benefit 2,088.79 a month (SSA, Sep 2026).
+
+Sources: Federal Reserve SCF 2025 (public data https://www.federalreserve.gov/econres/files/scfp2025excel.zip,
+tables, bulletin https://www.federalreserve.gov/publications/files/scf26.pdf); Census P60-289 Tables 1, 5
+and 11 (https://www2.census.gov/programs-surveys/demo/tables/p60/289/); BLS Usual Weekly Earnings Q2
+2026 (https://www.bls.gov/news.release/wkyeng.t05.htm); Vanguard *How America Saves 2026*; Fidelity Q2
+2026 Retirement Analysis and retirement guidelines; EBRI 2026 Retirement Confidence Survey; Gallup 2022
+and 2018 retirement polls; Boston College CRR Issue in Brief 25-8; BLS Consumer Expenditure Survey 2024
+by age; SSA Monthly Statistical Snapshot; BLS CPI-U. Full links in `benchmarks.js`.
+
+### 13.6 What the defaults show
+
+Two incomes of 62,608 at 42 with 45,000 invested: invested about the 55th percentile for 35–44
+(median 32.8K today); below the couples' median (61K); retirement accounts about the 57th among
+couples 35–44 (68% of them hold one, median 83.7K); 401(k) + employer 11.97% of pay against 11.6%
+typical, 18.2% with Roth and HSA, just under Vanguard's 12% target; household pay 125,216 about the
+63rd percentile of households (married-couple median 139K), each salary about the 44th percentile of
+full-time wage and salary workers 25+; savings 0.36× pay against Fidelity's 3.6× at 42; retiring at 65 against 65
+expected and 62 actual; spending 71K against 66K for 65+ households, one average Social Security
+benefit covering 35% (two, 71%).
+
+### 13.7 Tests
+
+The data (frozen, sources listed with https links, cutpoints rising, SCF bands 18+ with no gaps); CPI
+factors (to 4 places against the note) and no inflation for null or 2026; inclusive age bands;
+`cutsOf` ignoring means; `percentileOf` on hand-worked cutpoints (log vs linear, on a cutpoint, below,
+top, never rounding up to the top cutpoint, zeros and the linear step above them, a negative cutpoint,
+the Pareto tail); Fidelity interpolation (29 none, 35 2×, 42 3.6×, 63.5 9×, 80 10×); Vanguard's
+target edges (49,999 / 50,000 / 100,000 / 100,001); each comparison at the defaults against its hand
+formula (54.8, 57.2, 11.97%, 18.20%, 63.2, 43.8, 0.36×, 3.6×, CE × 2024's factor, Social Security not
+inflated); couples vs single selection; couples past 64 falling back to all households; nothing
+invested; Taxable + cash left out; maxing the 401(k); under 18; no pay; and the `ui.js` words
+(ordinals, bands, rates near a target, multiples, the summary line, the defaults' sentences, the
+before-60 line). The privacy scan accepts a published figure from `benchmarks.js` anywhere only if
+it is also written in this section.
+
 ## Sources
 
 IRS 2026 limits; Rev. Proc. 2025-19 (HSA); Treas. Reg. 1.401(a)(9)-9; IRS Notice 2022-6; IRS SEPP
@@ -893,5 +1056,8 @@ https://www.kitces.com/blog/rule-72t-sepp-calculate-payments-rmd-avoid-penalty-t
 BLS (earnings, CPS 11b, CE via FRED); Federal Reserve SCF 2022; Vanguard How America Saves 2025;
 CRS R48051; Devenir 2025 year-end HSA report; SSA Trustees economic assumptions; for the home
 (section 11.9): NAR, Freddie Mac PMMS and PMI pages, Census HVS, NBER w35124, Chase, LodeStar, RealTrends,
-ATTOM, NAIC via III, Fannie Mae, Shiller; WalletBurst,
+ATTOM, NAIC via III, Fannie Mae, Shiller; for How you compare (section 13.5): Federal Reserve SCF 2025,
+Census CPS ASEC 2026 (P60-289), BLS Usual Weekly Earnings Q2 2026, BLS Consumer Expenditure Survey 2024,
+BLS CPI-U, Vanguard How America Saves 2026, Fidelity Q2 2026 Retirement Analysis and guidelines, EBRI
+2026 Retirement Confidence Survey, Gallup (2022, 2018), Boston College CRR, SSA; WalletBurst,
 Pelcro and Liberated Stock Trader Coast FIRE calculators.

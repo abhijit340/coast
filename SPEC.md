@@ -17,7 +17,7 @@ Nothing the user types leaves the device. A test fails on any dollar amount not 
 - Files: `index.html`, `style.css`, `calc.js` (pure math, UMD: `window.CoastFire` / `module.exports`),
   `ui.js` (pure: the summary line of each collapsed section and the saved open/closed state, tested in
   node), `app.js` (DOM, SVG charts, storage), `sw.js` (network-first, cached fallback after 3 s; cache
-  `coast-fire-v6`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
+  `coast-fire-v7`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
   `tests/run_tests.js`, `README.md`, `SPEC.md`.
 - Mobile-first at 375px: one column, max-width 420px, 16px gutters plus safe-area insets, no
   horizontal scroll. At 860px and up: inputs on the left (340–400px), results on the right.
@@ -70,6 +70,31 @@ Removing Partner B (the × on B's card or the Two incomes switch) is single-pers
 B's solver row and B's bar disappear; self-only HSA limit becomes $4,400. One-person mode speaks to
 "you": Partner A's card, bar and hints say "You"/"your", the solver row has no badge, and the HSA row
 is "HSA" (two people: "HSA (shared)" for family coverage, "HSAs (A + B)" for self-only).
+
+### 2.1 Sliders on touch screens
+
+When any pointer is coarse (`(any-pointer: coarse)`, so 2-in-1 laptops too; `<html class="touch-guard">`)
+the slider's wrapper takes touches (`ui.js` `guardSlider`, attached to every range input). A mouse there
+keeps the browser's jump-then-drag (no toast); without a touch screen nothing changes. Keyboard is unchanged.
+- A vertical swipe over a slider scrolls the page (`touch-action: pan-y`); the value only moves once
+  the finger has gone 10px and more sideways than up/down (an exact diagonal scrolls).
+- Only a drag that starts within 24px of the thumb's center moves it (a 48px grab area; with the thumb
+  at either end, the wrapper's 8px overhang past the input keeps it 45px). A tap on the track or the
+  thumb does nothing. The drag is relative, so the thumb never jumps to the finger.
+- Only lifting the finger commits a drag. A `pointercancel` or lost capture (the browser decided to
+  scroll after all, a system edge gesture, a call, the app going to the background) puts the value back,
+  with no toast. There is no separate edge strip: sliders sit inside the page's 16px gutter, and an edge
+  swipe the system takes arrives as a cancel.
+- Rows are taller (44px slider, 10px field padding); the thumb is 26px on a 4px track. While dragging,
+  the thumb grows with a halo and the number box is tinted (accent border and wash, no focus ring;
+  an invalid box keeps its red border). The range labels do not open mid-drag.
+- After a touch drag that changed the value, one toast per drag: "Retirement age 65 to 58. Undo".
+  Undo puts focus back on the slider and says "Retirement age back to 65."
+- Not yet checked on a device: the range input has `pointer-events: none` under touch-guard, so
+  VoiceOver/TalkBack touch exploration may land on the wrapper instead of announcing the slider
+  (swipe navigation and swipe up/down to adjust are unaffected).
+- The number box stays the precise path; the range input keeps its slider role, aria-valuetext and
+  arrow keys (the page's own input events carry every change).
 
 ## 3. Outputs
 
@@ -348,7 +373,8 @@ Hand-checked with a 0% real return (nominal = inflation) so every value adds up 
 - With growth: loop = closed form (random sets), solver = brute force, solver = crossing when
   after = 0; required yearly total lands on FIRE; grid shape and % reached; limits and clamps; hash
   round trip incl. v1 links; slider scale; formatting (money as $1,234,567; 999,600 counts as $1M); the defaults table above; the Single Life
-  values; the collapsed-row summaries and the saved open/closed map (`ui.js`); and the privacy scan (no spreadsheets; no dollar amount or 4+ digit number outside the
+  values; the collapsed-row summaries and the saved open/closed map (`ui.js`); the touch-slider
+  helpers (tap / sideways / vertical, near-thumb hit test, commit vs revert on lift or cancel, relative drag; `ui.js`); and the privacy scan (no spreadsheets; no dollar amount or 4+ digit number outside the
   allowlist of figures in this file), plus a check that every allowlist entry is written in this
   file or a test scenario.
 

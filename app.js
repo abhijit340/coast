@@ -23,7 +23,13 @@ const cmp = (x) => CF.fmtCompact(x, 2);
 const kRound = (x) => CF.fmtCompact(Math.round(x / 1000) * 1000); // "$23K"
 const pct1 = (x) => (Math.round(x * 1000) / 10).toFixed(1) + "%";
 const reduceMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
-const coarse = window.matchMedia ? window.matchMedia("(pointer: coarse)") : { matches: false };
+// Any touch screen, also one beside a mouse or trackpad (a 2-in-1): sliders take touches
+// through ui.js guardSlider (style.css .touch-guard), whose mouse branch keeps a mouse's
+// jump-then-drag.
+const coarse = window.matchMedia ? window.matchMedia("(any-pointer: coarse)") : { matches: false };
+const syncTouchGuard = () => document.documentElement.classList.toggle("touch-guard", !!coarse.matches);
+syncTouchGuard();
+if (coarse.addEventListener) coarse.addEventListener("change", syncTouchGuard);
 
 let values = { ...CF.DEFAULTS };
 let result = null, gridRes = null, bridgeRes = null, houseRes = null;
@@ -353,6 +359,29 @@ function wireField(key) {
     notes[key] = { err: "", adj: "" };
     setSlider(key, true);
     userChanged();
+  });
+  // Touch: only a sideways drag from the thumb changes the value (ui.js guardSlider), and
+  // each such drag offers an Undo.
+  const field = slider.closest(".field");
+  let before = values[key];
+  UI.guardSlider(slider, {
+    onStart: () => { before = values[key]; field.classList.add("sliding"); },
+    onEnd: ({ touch, cancelled }) => {
+      field.classList.remove("sliding");
+      const after = values[key], was = before;
+      // Cancelled (the browser or system took the gesture): back to the exact starting value,
+      // which the slider's own position may only approximate. No toast.
+      if (cancelled) { if (after !== was) { values[key] = was; showAll(); userChanged(); } return; }
+      if (!touch || after === was) return;
+      const m = metaOf(key), p = partnerOf(key), name = `${p ? `Partner ${p}: ` : ""}${m.label}`;
+      // Plain "to" so screen readers do not read out symbols.
+      toast(`${name} ${withUnit(key, was)} to ${withUnit(key, after)}. `,
+        toastButton("Undo", () => {
+          values[key] = was; showAll(); update();
+          slider.focus({ preventScroll: true }); // the Undo button is about to go away
+          toast(`${name} back to ${withUnit(key, was)}.`);
+        }));
+    },
   });
 }
 

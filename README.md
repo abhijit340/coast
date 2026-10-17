@@ -15,6 +15,7 @@ The first screen holds only the answer and the chart. Everything else is still t
 - **Answer first.** A progress ring, a status chip (On track / Coasting now / Not before 65 / $X short), the earliest age you could both stop saving, and one sentence about that same scenario. When nothing works yet (the case with the median defaults), it says how far short you are and what would close it: save more each year, retire later, or spend less.
 - **Your numbers:** ages, invested money and retirement spending; then collapsed rows for returns, inflation & withdrawals and for an optional Barista FIRE draw while coasting. A field's (i) shows its note.
 - **Partners A and B** (stack on phones): salary and a total line shown; 401(k), employer %, Roth IRA and an optional "Coast from an age" in a collapsed row, with "Keep saving after coasting" (% of before). The × or the Two incomes switch makes it a one-person plan. Legal limits show as a tick and label on the slider; typing over one clamps with a note.
+- **Sliders on phones:** a vertical swipe across a slider scrolls the page, a tap on the track does nothing, and only a sideways drag that starts on the thumb moves it (the thumb glows and the number box lights up), with a toast to Undo it; a drag the phone interrupts puts the value back. The number box is the precise way in; arrow keys and screen readers work as before.
 - **HSA:** one collapsed row for the household; Family (one $8,750 limit) or Self-only ($4,400 each).
 - **Go deeper** (collapsed rows below the inputs, or on the right on wide screens): contributions, earliest coast age, what-if table, the bridge, and how it works.
 - **Earliest coast age:** solved for both together and for each partner alone (the other's plan held as set), each with an **Apply** button that sets the coast switches and ages.
@@ -33,7 +34,7 @@ The first screen holds only the answer and the chart. Everything else is still t
 | `calc.js` | All the math, pure functions, no DOM. `window.CoastFire` in the browser, `require("./calc.js")` in node. Holds the 2026 limits and the IRS Single Life Table (ages 30–60) |
 | `ui.js` | The one-line summaries on collapsed rows and the saved open/closed state; pure, tested in node |
 | `app.js` | Builds the fields, keeps boxes and sliders in sync, writes results, draws the SVG charts, saves inputs |
-| `sw.js` | Service worker: network first, saved copy after 3 s or offline. Bump `CACHE` (now `coast-fire-v6`) whenever the files change |
+| `sw.js` | Service worker: network first, saved copy after 3 s or offline. Bump `CACHE` (now `coast-fire-v7`) whenever the files change |
 | `manifest.webmanifest`, `icons/` | Home-screen install. `python tools/make_icons.py` (needs Pillow) redraws the icons |
 | `privacy.html` | Privacy note |
 | `tests/run_tests.js` | Tests |
@@ -45,7 +46,7 @@ The first screen holds only the answer and the chart. Everything else is still t
 node tests/run_tests.js
 ```
 
-No packages needed. Hand-checked cases for two incomes, coast downshifts, the family vs self-only HSA, the Barista draw, the earliest-coast-age solver (together and each partner alone), the 72(t) payment ($1,000,000 at 45, 5%, life expectancy 41.0 → $57,822.29), a bridge timeline with gap years and ladder rungs, and rent vs buy (mortgage payment and balance, PMI drop-off at 78%, owning costs flowing into saving with a floor at 0, the owner's FIRE number, breakevens that tie net worth, equity after selling costs, and that switching it off changes nothing else); closed-form and brute-force cross-checks; limits, clamps, the URL hash, slider scale and formatting; that the defaults equal the cited table and the Single Life values match the regulation; and a privacy scan that fails on spreadsheets or on any dollar amount or 4+ digit number not on its allowlist.
+No packages needed. Hand-checked cases for two incomes, coast downshifts, the family vs self-only HSA, the Barista draw, the earliest-coast-age solver (together and each partner alone), the 72(t) payment ($1,000,000 at 45, 5%, life expectancy 41.0 → $57,822.29), a bridge timeline with gap years and ladder rungs, and rent vs buy (mortgage payment and balance, PMI drop-off at 78%, owning costs flowing into saving with a floor at 0, the owner's FIRE number, breakevens that tie net worth, equity after selling costs, and that switching it off changes nothing else); closed-form and brute-force cross-checks; limits, clamps, the URL hash, slider scale and formatting; the touch-slider gestures (tap, sideways drag, vertical swipe, near-thumb hit test, a cancelled drag putting the value back); that the defaults equal the cited table and the Single Life values match the regulation; and a privacy scan that fails on spreadsheets or on any dollar amount or 4+ digit number not on its allowlist.
 
 To preview, serve the folder (`python -m http.server 8000`) and open http://localhost:8000/.
 

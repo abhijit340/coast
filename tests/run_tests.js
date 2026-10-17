@@ -420,6 +420,50 @@ check("HSA slider follows the coverage limit", CF.valueToSlider("hsa", 4400, 440
 check("linear sliders are unchanged", CF.valueToSlider("age", 42) === 42 && CF.valueToSlider("age", 5) === 18 && CF.valueToSlider("nominal", 30) === 12);
 check("nice rounding", CF.niceRound(1234567, 1000) === 1250000 && CF.niceRound(45200, 1000) === 45000 && CF.niceRound(0, 50) === 0);
 
+// ---------- touch-safe sliders: gesture helpers (ui.js, SPEC 2.1) ----------
+{
+  const G = UI.classifyGesture;
+  check("gesture: under 10px is still pending (a tap if it ends there)",
+    G(0, 0) === "pending" && G(6, 7) === "pending" && G(-9, 0) === "pending" && UI.gestureEnd("pending") === "tap");
+  check("gesture: mostly sideways is a drag", G(10, 0) === "horizontal" && G(-14, 9) === "horizontal" && G(30, -29) === "horizontal");
+  check("gesture: mostly up/down is a scroll", G(0, 10) === "vertical" && G(4, -30) === "vertical" && G(9, 12) === "vertical");
+  check("gesture: exactly diagonal scrolls (the page wins a tie)", G(20, 20) === "vertical" && G(-20, 20) === "vertical");
+  check("gesture: drag and scroll keep their names when the finger lifts", UI.gestureEnd("horizontal") === "horizontal" && UI.gestureEnd("vertical") === "vertical");
+  check("gesture: the slop can be changed", G(12, 0, 20) === "pending" && G(12, 0, 5) === "horizontal");
+
+  // A 300px slider, 26px thumb: the thumb's center runs from 13 to 287.
+  const T = UI.thumbCenter;
+  check("thumb center: ends and middle stay inside the input",
+    T(0, 0, 100, 300, 26) === 13 && T(100, 0, 100, 300, 26) === 287 && T(50, 0, 100, 300, 26) === 150);
+  check("thumb center: values past the ends pin, an empty range sits at the start",
+    T(-5, 0, 100, 300, 26) === 13 && T(150, 0, 100, 300, 26) === 287 && T(3, 3, 3, 300, 26) === 13);
+  check("thumb center: offset ranges (ages 18..80)", near(T(65, 18, 80, 300, 26), 13 + 47 / 62 * 274, 1e-9));
+  const N = UI.nearThumb;
+  check("near thumb: within 24px of its center grabs it",
+    N(150, 50, 0, 100, 300, 26) && N(174, 50, 0, 100, 300, 26) && N(126, 50, 0, 100, 300, 26) && N(0, 0, 0, 100, 300, 26));
+  check("near thumb: a tap further along the track does not", !N(175, 50, 0, 100, 300, 26) && !N(20, 50, 0, 100, 300, 26) && !N(290, 0, 0, 100, 300, 26));
+  check("near thumb: the grab area is at least 44px wide", UI.REACH * 2 >= 44 && N(150 + 22, 50, 0, 100, 300, 26) && N(150 - 22, 50, 0, 100, 300, 26));
+  check("near thumb: the 8px overhang keeps 45px+ of grab at the ends (x from -8 past the input's left)",
+    N(-8, 0, 0, 100, 300, 26) && N(37, 0, 0, 100, 300, 26) && N(308, 100, 0, 100, 300, 26) && N(263, 100, 0, 100, 300, 26));
+
+  const F = UI.gestureFinish;
+  const same = (o, c, r) => o.commit === c && o.revert === r;
+  check("finish: a lifted finger after a drag commits only a changed value",
+    same(F("horizontal", 65, 58, false), true, false) && same(F("horizontal", 65, 65, false), false, false));
+  check("finish: a cancelled drag puts the value back and never commits",
+    same(F("horizontal", 65, 85, true), false, true) && same(F("horizontal", 65, 65, true), false, false));
+  check("finish: taps and scrolls do nothing, lifted or cancelled",
+    same(F("pending", 65, 65, false), false, false) && same(F("vertical", 65, 65, true), false, false) && same(F("pending", 65, 70, true), false, false));
+
+  const D = UI.dragValue;
+  check("drag: no movement keeps the value (no jump to the finger)", D(50, 0, 0, 100, 1, 300, 26) === 50 && D(37, 0, 0, 100, 1, 300, 26) === 37);
+  check("drag: moving the full travel goes end to end", D(0, 274, 0, 100, 1, 300, 26) === 100 && D(100, -274, 0, 100, 1, 300, 26) === 0);
+  check("drag: relative to where the thumb was", D(50, 27.4, 0, 100, 1, 300, 26) === 60 && D(65, -7 * 274 / 62, 18, 80, 1, 300, 26) === 58 && D(65, -5, 18, 80, 1, 300, 26) === 64);
+  check("drag: clamped at the ends", D(90, 500, 0, 100, 1, 300, 26) === 100 && D(10, -500, 0, 100, 1, 300, 26) === 0);
+  check("drag: snaps to the step without float dust", D(4, 13.7, 0, 12, 0.1, 300, 26) === 4.6 && D(0, 1, 1, 10, 0.5, 300, 26) === 1);
+  check("drag: a zero step or a narrow input does not break it", D(5, 3, 0, 10, 0, 300, 26) === 5 && Number.isFinite(D(5, 3, 0, 10, 1, 10, 26)));
+}
+
 // ---------- collapsed sections: saved state and summary lines (ui.js) ----------
 {
   const P = (raw) => J(UI.parseOpen(raw));

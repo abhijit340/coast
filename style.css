@@ -394,7 +394,7 @@ td.cur { outline: 2.5px solid var(--ink); outline-offset: 1px; }
 .field.show-hint .range { display: flex; }
 @supports selector(:has(a)) {
   .field:has(.box input:focus) .hint { display: block; }
-  .field:has(.box input:focus) .range, .field:has(input[type="range"]:focus-visible) .range { display: flex; }
+  .field:has(.box input:focus) .range, .field:not(.sliding):has(input[type="range"]:focus-visible) .range { display: flex; }
 }
 @supports not selector(:has(a)) {
   .field:focus-within .hint { display: block; }
@@ -407,6 +407,7 @@ td.cur { outline: 2.5px solid var(--ink); outline-offset: 1px; }
   border-radius: 1px; pointer-events: none;
 }
 input[type="range"] {
+  --thumb: 22px; /* read by ui.js guardSlider to find the thumb */
   position: relative; z-index: 1; /* the thumb covers the limit tick when it sits on the limit */
   width: 100%; margin: 0; height: 32px; background: none; -webkit-appearance: none; appearance: none; touch-action: pan-y; display: block;
 }
@@ -415,12 +416,30 @@ input[type="range"]::-webkit-slider-runnable-track {
   background: linear-gradient(to right, var(--accent) var(--fill, 50%), var(--line) var(--fill, 50%));
 }
 input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none; box-sizing: border-box; width: 22px; height: 22px; margin-top: -9px; border-radius: 50%;
+  -webkit-appearance: none; box-sizing: border-box; width: var(--thumb); height: var(--thumb); margin-top: calc((4px - var(--thumb)) / 2); border-radius: 50%;
   background: var(--surface); border: 2px solid var(--accent); box-shadow: 0 1px 3px rgba(0, 0, 0, .2);
+  transition: box-shadow .12s ease, background-color .12s ease, transform .12s ease;
 }
 input[type="range"]::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line); }
 input[type="range"]::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
-input[type="range"]::-moz-range-thumb { box-sizing: border-box; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); }
+input[type="range"]::-moz-range-thumb { box-sizing: border-box; width: var(--thumb); height: var(--thumb); border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); transition: box-shadow .12s ease, background-color .12s ease, transform .12s ease; }
+/* Touch screens (<html class="touch-guard">, set by app.js on any coarse pointer): the
+   wrapper takes the touches (ui.js guardSlider), so a tap on the track or a vertical swipe
+   never moves a value. 44px-tall rows, a larger thumb (48px grab width in JS), slim track.
+   The wrapper overhangs the input by 8px each side (into the page/card padding), so the grab
+   area stays 45px+ with the thumb at either end. While dragging the thumb shows a halo and the
+   number box is tinted (no focus ring: focus is on the slider). */
+.touch-guard .field { padding: 10px 0; }
+.touch-guard .slider { margin: 0 -8px; padding: 0 8px; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+.touch-guard input[type="range"] { --thumb: 26px; height: 44px; pointer-events: none; }
+.touch-guard .slider .limit-tick { right: 20px; } /* under the larger thumb's center at the end (8px overhang + 12px) */
+.touch-guard .slider.dragging input[type="range"]::-webkit-slider-thumb { background: var(--accent-soft); box-shadow: 0 0 0 10px var(--focus); transform: scale(1.15); }
+.touch-guard .slider.dragging input[type="range"]::-moz-range-thumb { background: var(--accent-soft); box-shadow: 0 0 0 10px var(--focus); transform: scale(1.15); }
+.field.sliding:not(.invalid) .box { border-color: var(--accent); background: var(--accent-wash); box-shadow: none; }
+@media (prefers-reduced-motion: reduce) {
+  input[type="range"]::-webkit-slider-thumb { transition: none; }
+  input[type="range"]::-moz-range-thumb { transition: none; }
+}
 input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .range { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin-top: -4px; font-variant-numeric: tabular-nums; }
 .range .lim { color: var(--ink-2); font-weight: 600; }

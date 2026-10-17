@@ -1,6 +1,8 @@
-// Coast FIRE: the one-line summaries shown on collapsed sections, and the saved
-// open/closed state of those sections. Pure functions, no DOM, so the tests can
-// check them in node; app.js puts the strings on the page. Needs calc.js first.
+// Coast FIRE: the one-line summaries shown on collapsed sections, the saved
+// open/closed state of those sections, and the touch-safe slider gestures. Pure
+// functions, so the tests can check them in node; app.js puts the strings on the
+// page. The one DOM piece, guardSlider(), runs only when the page calls it.
+// Needs calc.js first.
 (function (root) {
   "use strict";
   const CF = root.CoastFire || (typeof require === "function" ? require("./calc.js") : null);
@@ -174,10 +176,136 @@
     return parts.concat(ahead).join(" · ") || "not found";
   }
 
+
+  // ---------- touch-safe sliders (SPEC 2.1) ----------
+  // On a touch screen a range input jumps to wherever a finger lands and grabs vertical
+  // swipes meant for the page. guardSlider() takes touches over instead: only a sideways
+  // drag that starts on or near the thumb changes the value; taps and vertical swipes do
+  // nothing (the page scrolls). Mouse and keyboard keep the browser's own behavior, and the
+  // input stays a real <input type="range"> for screen readers and arrow keys.
+
+  const SLOP = 10;   // px a finger moves before the gesture counts as a drag or a swipe
+  const REACH = 24;  // px either side of the thumb's center that still grabs it (48px target;
+                     // at the ends the wrapper's 8px overhang in style.css keeps it 45px or more)
+
+  // "pending" (still within the slop), "horizontal" (a drag) or "vertical" (a scroll).
+  // Exactly diagonal counts as vertical: when in doubt, the page scrolls.
+  function classifyGesture(dx, dy, slop = SLOP) {
+    const ax = Math.abs(dx), ay = Math.abs(dy);
+    if (Math.hypot(ax, ay) < slop) return "pending";
+    return ax > ay ? "horizontal" : "vertical";
+  }
+  // A gesture that ended while still "pending" was a tap.
+  const gestureEnd = (state) => (state === "pending" ? "tap" : state);
+
+  // Where the thumb's center sits, in px from the input's left edge: browsers keep the whole
+  // thumb inside the input, so the center runs from thumb/2 to width - thumb/2.
+  function thumbCenter(value, min, max, width, thumb) {
+    const span = max - min, f = span > 0 ? Math.min(1, Math.max(0, (value - min) / span)) : 0;
+    return thumb / 2 + f * Math.max(0, width - thumb);
+  }
+  // Whether a touch at x (px from the input's left edge) is on or near the thumb.
+  function nearThumb(x, value, min, max, width, thumb, reach = REACH) {
+    return Math.abs(x - thumbCenter(value, min, max, width, thumb)) <= reach;
+  }
+  // What ending a gesture does. Only a finger lifted after a sideways drag commits (a
+  // "change" event and the Undo toast). A pointercancel means the browser or the system took
+  // the gesture over (a late scroll, an edge swipe, a call), so a drag puts the value back.
+  function gestureFinish(state, start, value, cancelled) {
+    if (state !== "horizontal") return { commit: false, revert: false };
+    if (cancelled) return { commit: false, revert: value !== start };
+    return { commit: value !== start, revert: false };
+  }
+  // The value after dragging dx px from where the thumb was grabbed: relative, so the thumb
+  // never jumps to the finger; snapped to the step and kept within min..max.
+  function dragValue(start, dx, min, max, step, width, thumb) {
+    const travel = Math.max(1, width - thumb);
+    const raw = start + dx / travel * (max - min);
+    const st = step > 0 ? step : 1;
+    const n = Math.round((Math.min(max, Math.max(min, raw)) - min) / st);
+    const decimals = (String(st).split(".")[1] || "").length;
+    return Math.min(max, Math.max(min, +(min + n * st).toFixed(decimals)));
+  }
+
+  // Wires one range input (DOM; the page calls it, the tests don't). The input's wrapper
+  // receives the touches: CSS turns pointer events off on the input itself while
+  // <html class="touch-guard"> is set (any coarse pointer). opts.onStart() runs when
+  // a drag begins and opts.onEnd({ changed, start, touch, cancelled }) when it ends; value changes go
+  // through the input's own "input" and "change" events, so the page needs no other path.
+  function guardSlider(input, opts = {}) {
+    const wrap = input.parentElement;
+    let g = null; // { id, x0, y0, start, state, rect, thumb }
+    const num = (v, d) => (Number.isFinite(+v) && v !== "" ? +v : d);
+    const range = () => ({ min: num(input.min, 0), max: num(input.max, 100), step: num(input.step, 1) });
+    const thumbPx = () => parseFloat(getComputedStyle(input).getPropertyValue("--thumb")) || 22;
+    const fire = (type) => input.dispatchEvent(new Event(type, { bubbles: true }));
+    // Focus the slider for the drag. A number box that had focus is blurred first, so Chrome
+    // does not carry its :focus-visible over to the slider (which would show the range labels).
+    const focusInput = () => {
+      const ae = document.activeElement;
+      if (ae && ae !== input && ae !== document.body && ae.blur) ae.blur();
+      input.focus({ preventScroll: true });
+    };
+    // Ends the gesture: commit on a lifted finger, put the value back on a cancel.
+    const finish = (cancelled) => {
+      if (!g) return;
+      const was = g; g = null;
+      wrap.classList.remove("dragging");
+      if (was.state !== "horizontal") return;
+      const out = gestureFinish(was.state, was.start, +input.value, cancelled);
+      if (out.revert) { input.value = was.start; fire("input"); }
+      if (out.commit) fire("change");
+      if (opts.onEnd) opts.onEnd({ changed: out.commit, start: was.start, touch: !was.mouse, cancelled: !!cancelled });
+    };
+    wrap.addEventListener("pointerdown", (e) => {
+      if (!document.documentElement.classList.contains("touch-guard") || !e.isPrimary || input.disabled) return;
+      finish(true); // a gesture whose pointerup never arrived: drop it without committing
+      const rect = input.getBoundingClientRect(), r = range(), thumb = thumbPx();
+      const x = e.clientX - rect.left, value = num(input.value, r.min);
+      if (e.pointerType === "mouse") {
+        // A mouse on a touch-first device: like the browser's own slider (jump, then drag).
+        if (e.button !== 0) return;
+        e.preventDefault();
+        try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
+        focusInput();
+        wrap.classList.add("dragging");
+        if (opts.onStart) opts.onStart();
+        const v = dragValue(r.min, x - thumb / 2, r.min, r.max, r.step, rect.width, thumb);
+        g = { id: e.pointerId, x0: e.clientX, y0: e.clientY, start: value, base: v, state: "horizontal", rect, thumb, mouse: true };
+        if (v !== value) { input.value = v; fire("input"); }
+        return;
+      }
+      if (!nearThumb(x, value, r.min, r.max, rect.width, thumb)) return;
+      g = { id: e.pointerId, x0: e.clientX, y0: e.clientY, start: value, base: value, state: "pending", rect, thumb };
+    });
+    wrap.addEventListener("pointermove", (e) => {
+      if (!g || e.pointerId !== g.id || g.state === "vertical") return;
+      const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
+      if (g.state === "pending") {
+        g.state = classifyGesture(dx, dy);
+        if (g.state !== "horizontal") return;
+        focusInput();
+        wrap.classList.add("dragging");
+        if (opts.onStart) opts.onStart();
+      }
+      const r = range();
+      const v = dragValue(g.base, dx, r.min, r.max, r.step, g.rect.width, g.thumb);
+      if (v !== +input.value) { input.value = v; fire("input"); }
+      e.preventDefault();
+    });
+    wrap.addEventListener("pointerup", (e) => { if (g && e.pointerId === g.id) finish(false); });
+    wrap.addEventListener("pointercancel", (e) => { if (g && e.pointerId === g.id) finish(true); });
+    // Capture lost without a pointerup (pointerup runs first when there is one): a cancel.
+    wrap.addEventListener("lostpointercapture", (e) => { if (g && e.pointerId === g.id) finish(true); });
+    // A long press would otherwise open the text-selection / callout menu.
+    wrap.addEventListener("contextmenu", (e) => { if (g) e.preventDefault(); });
+  }
+
   const api = {
     UI_KEY, HINT_KEY, parseOpen, withOpen, isOpenIn,
     nudgeLine, spoken, kpiSummary, contribSummary, ecSummary, sparkSummary, partnerSummary, afterCoast, heatSummary, hsaSummary,
     drawSummary, assumeSummary, bridgeSummary, houseSummary, houseCostsSummary, houseHowSummary, breakevenSummary,
+    SLOP, REACH, classifyGesture, gestureEnd, gestureFinish, thumbCenter, nearThumb, dragValue, guardSlider,
   };
   root.CoastUI = api;
   if (typeof module === "object" && module.exports) module.exports = api;

@@ -17,7 +17,7 @@ Nothing the user types leaves the device. A test fails on any dollar amount not 
 - Files: `index.html`, `style.css`, `calc.js` (pure math, UMD: `window.CoastFire` / `module.exports`),
   `ui.js` (pure: the summary line of each collapsed section and the saved open/closed state, tested in
   node), `app.js` (DOM, SVG charts, storage), `sw.js` (network-first, cached fallback after 3 s; cache
-  `coast-fire-v5`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
+  `coast-fire-v6`), `manifest.webmanifest`, `icons/` (made by `tools/make_icons.py`), `privacy.html`,
   `tests/run_tests.js`, `README.md`, `SPEC.md`.
 - Mobile-first at 375px: one column, max-width 420px, 16px gutters plus safe-area insets, no
   horizontal scroll. At 860px and up: inputs on the left (340–400px), results on the right.
@@ -94,7 +94,7 @@ keys); then
 the four main inputs, the Two incomes switch, each partner's salary with one total line ("Saving $X/yr
 · Y% of pay"), and Copy link / Reset. Everything else is a native `<details>` row whose closed summary
 shows a live one-line value at a fixed height: the numbers (KPIs) right after the chart; Returns;
-Barista draw; each partner's 401(k), employer, Roth and coast plan; HSA; and a "Go deeper" list:
+Barista draw; each partner's 401(k), employer, Roth and coast plan; HSA; Buying a home (off by default, section 11); and a "Go deeper" list:
 contributions, earliest coast age (with the sparkline nested), what if returns differ (with "How to read
 this" nested), the early-access bridge, and how it works (seven explainers in the same rows, all closed, "What is Coast FIRE?" first).
 "What if returns differ" summarises the grid ("N of 25 make it", "all 25 make it", "none make it by R").
@@ -283,7 +283,7 @@ buttons (only next to a solved age) and a sparkline zoomed to the data (no "$0" 
 scale reaches 0; the title says where the scale starts; the "reaches FIRE" zone is a neutral wash); heatmap as a real `<table>` with focusable cells;
 bridge timeline.
 
-## 8. Default values and citations (verified 2026-10-16)
+## 8. Default values and citations (verified 2026-10-16; the home's defaults are in 11.9)
 
 | Input | Default | Source |
 |---|---|---|
@@ -356,7 +356,266 @@ Hand-checked with a 0% real return (nominal = inflation) so every value adds up 
 
 Taxes (income tax on 72(t) and conversions, capital gains), Social Security, pensions, catch-up
 contributions, Roth income limits, employer match formulas, Monte Carlo, post-retirement drawdown,
-accounts or a server.
+accounts or a server. For the home (section 11): a home already owned, refinancing, extra principal
+payments, moving or buying twice, the mortgage interest deduction, capital-gains tax on the sale,
+and taxes or penalties on taking the down payment out of retirement accounts.
+
+## 11. Buying a home (rent vs buy)
+
+An optional comparison: *"If we bought a home at age b instead of renting, when would we reach
+FIRE, and what would we own at R?"* It is **off by default** and changes nothing on the page until
+switched on. Renting is the plan as entered (the main projection, untouched); buying is the same plan
+with the purchase and the month-to-month difference in housing cost flowing through savings. Not
+advice; a model with stated assumptions.
+
+### 11.1 Inputs (today's dollars; every number has a box and a slider like section 2)
+
+| id | Label | Default | Slider | Field limits | Hash |
+|---|---|---|---|---|---|
+| `houseOn` | Compare buying a home (switch) | off (0) | | | `ho` |
+| `buyAge` | Buy at age | 45 | 18–85 | 0–120, whole | `hb` |
+| `price` | Home price (today's dollars, when you buy) | 418,000 | 50K–1.5M √ | 0–1e9, step 1,000 | `hp` |
+| `downPct` | Down payment | 10% | 3–50 | **3**–100 (no 100% loan) | `hd` |
+| `downFrom` | Down payment comes from (segmented) | Invested assets (1) | | 1 = invested assets, 0 = separate cash | `hf` |
+| `mortRate` | Mortgage rate (before inflation) | 7.4% | 2–10 | 0–20, step 0.05 | `hm` |
+| `term` | Term (segmented 15 / 30 years) | 30 | | anything but 15 cleans to 30 | `ht` |
+| `pmi` | Mortgage insurance (PMI) (only when down < 20%; dimmed with "Not needed at 20% down" otherwise) | 0.6%/yr of the loan | 0–1.5 | 0–3 | `hq` |
+| `closePct` | Closing costs when buying | 3% of price | 0–6 | 0–10 | `hc` |
+| `sellPct` | Selling costs (net-worth comparison only) | 6% of value | 0–10 | 0–15 | `hs` |
+| `propTax` | Property tax | 0.9%/yr of value | 0–3 | 0–5 | `hx` |
+| `insure` | Home insurance | 1,600/yr | 0–10K √ | 0–1e6, step 50 | `hi` |
+| `maint` | Maintenance | 1.0%/yr of value | 0–4 | 0–10 | `hn` |
+| `apprec` | Home price growth above inflation | 0.5%/yr | −2–3 | −10–10 | `hg` |
+| `rent` | Rent today | 1,530/mo | 0–5K √ | 0–1e6, step 10 | `hr` |
+| `rentGrowth` | Rent growth above inflation | 0.0%/yr | −2–3 | −10–10 | `hw` |
+
+All sixteen join `DEFAULTS`, `FIELDS`, `KEYS` and `HASH_KEYS` (the short names above collide with
+none in use), so storage (`coastfire.v2`), shared links and Reset cover them; older links without them
+open with the house off. Switches and segments are stored as numbers (0/1, 15/30). Hints:
+- `buyAge`: "Already own your home? This section models a purchase, not a home you have." Buy age ≤
+  current age → "Buying today." (the purchase happens at the current age).
+- `price`: "What the home would cost if you bought it today; appreciation starts when you buy."
+  The price is *at purchase*, so `apprec` only acts after the purchase and the breakeven in 11.4 is
+  well defined.
+- `rent`: "The rent for a home like the one you'd buy. Your retirement spending above already
+  includes today's rent." (the explicit assumption, see 11.3).
+- `downFrom` = invested assets, retAge or buyAge < 59½: "Taking it from a 401(k) or IRA before 59½
+  usually costs tax and a 10% penalty (IRAs allow up to $10,000 once for a first home); not modeled."
+- `pmi`: "Ends when the loan is scheduled to reach 78% of the price (you can ask at 80%)."
+
+### 11.2 The model (calc.js `house(inputs, res)`; real, today's dollars, yearly like 4.3)
+
+Notation: `π = inflation`, `r` = real return (4.1), `R = retAge`, `b = max(buyAge, age)`, `j = a − b`
+(years since buying), `P = price`, `g = apprec`, `ρ = rentGrowth`.
+
+At purchase:
+- Down `D = P × downPct`, loan `L = P − D`, closing `K = P × closePct`, **cash at closing `D + K`**.
+- Mortgage, fixed in dollars of the purchase year: monthly rate `m = mortRate / 12`, `N = 12 × term`,
+  `PMT = L · m / (1 − (1 + m)^−N)`; `m = 0` → `PMT = L / N`; `L = 0` → 0.
+- Scheduled balance after t payments (nominal) `S(t) = L(1+m)^t − PMT((1+m)^t − 1)/m`
+  (`m = 0`: `L − PMT·t`), 0 once `t ≥ N`. In today's dollars at the end of year j: `S(12j) / (1+π)^j`.
+
+Each year starting at age a ≥ b (j = a − b):
+- Home value `V(a) = P (1 + g)^j`.
+- Owning cost `Own(a)` = P&I `12·PMT / (1+π)^j` (j < term, else 0; a fixed payment shrinks in real
+  terms) + tax `propTax · V(a)` + insurance `insure` (constant in today's dollars) + maintenance
+  `maint · V(a)` + PMI `pmi · L / (1+π)^j × months/12` while `downPct < 20`, where `months` counts the
+  months of year j whose scheduled balance at the start is above `0.78 P` (12 until the crossing year,
+  pro-rated in it, 0 after; the automatic termination point under the Homeowners Protection Act,
+  scheduled balance against the original value; earlier cancellation at 80% or on a new appraisal is
+  not modeled).
+- Rent instead `Rent(a) = 12 · rent · (1 + ρ)^(a − age)`.
+- Difference `Δ(a) = Own(a) − Rent(a)` (positive = owning costs more).
+
+The buying path (`buyPath`, same shape as `path` in 4.3, same plan, same coast ages and Barista draw):
+`B_0 = assets`; in the year starting at age a, contributions `C′(a) = max(0, C(a) − Δ(a))` for
+a ≥ b (else `C(a)`); `deficit(a) = max(0, Δ(a) − C(a))` is reported, not taken from the portfolio
+(it is assumed to come out of pay; see the caveats). At a = b with `downFrom` = invested assets the
+cash at closing leaves first: `B ← B − (D + K)`, then the year runs as usual:
+`B_{k+1} = max(0, B_k (1 + r) + C′(age + k) − D_draw(age + k))`. When owning is cheaper (Δ < 0) the
+saving adds to contributions, coasting or not. When `B < D + K` at b, `cashShort = D + K − B`; the path
+floors at 0 and continues, and the page leads with the shortfall (11.5). The shortfall is not a gift:
+buying net worth (and so both breakevens) subtracts it as a debt grown at r to R,
+`cashShort (1 + r)^(R − b)`, and a line under the comparison says so. `downFrom` = separate cash:
+the portfolio is untouched; for fairness the renter is credited the same cash invested at r from b
+in net worth only (`(D + K)(1 + r)^(R − b)`), never in the FIRE portfolio.
+
+Home equity at age a: `V(a) − S(12j)/(1+π)^j`; after selling costs: `V(a)(1 − sellPct) − balance`.
+**Equity is never counted toward the FIRE portfolio** (you have to live somewhere); it appears only in
+net worth.
+
+### 11.3 Retirement spending and the two FIRE numbers
+
+Assumption, stated in the section: *retirement spending (`spend`) includes today's rent.* So:
+- **Renting:** `FIRE_rent = (spend + Rent(R) − 12·rent) / swr` (= the main FIRE number when ρ = 0;
+  with rent growth the renter's spending moves with rent).
+- **Owning:** rent is replaced by carrying costs at R, and any mortgage left is a finite debt, so it is
+  added as its present value rather than divided by the SWR:
+  `FIRE_own = (spend − 12·rent + tax(R) + insure + maint(R)) / swr + M_R`, with
+  `M_R = Σ_{j = R−b}^{term−1} 12·PMT/(1+π)^j / (1+r)^(j − (R−b) + 1)` (0 when paid off by R; PMI at R
+  is ignored as nearly always ended). The yearly part (before ÷ swr) floors at 0, for both numbers.
+- At other ages a (for FI ages, 11.4) the same formulas with R → a; before b the renter's number.
+- Both numbers freeze housing costs at R: `Rent(R)` for the renter, and tax and maintenance on `V(R)`
+  for the owner. Rent growth and home price growth after R are ignored, so with `ρ` or `g` above 0 both
+  are understated, and not equally (at the defaults, ρ = 0 and g = 0.5%, slightly in the owner's
+  favor). Said in the caveats.
+- With ρ ≠ 0 the renting column's FIRE number and FI age differ from the main plan's (which keeps
+  `spend/swr`); a line under the comparison says so ("Renting here includes rent growth of X%/yr, so
+  its FIRE number ($A) and FI age differ from the main plan's ($B).").
+
+### 11.4 Outputs (`house()` returns; all shown only when `houseOn`)
+
+- **Monthly cost in the first year of owning:** `Own(b)/12` split P&I · tax · insurance · maintenance ·
+  PMI, against `Rent(b)/12`; one line "Owning costs $X/mo more (less) than renting at first."
+- **Cash at closing** `D + K` (down + closing), and where it comes from.
+- **FI age, renting vs buying**: the never-coast definition of 4.4 (full saving, coast ages and draw
+  ignored, working past R if needed, to `top`), with the target at each age being that path's FIRE
+  number at that age; the fractional age interpolates the gap `B(a) − FIRE(a)` linearly between the
+  two year-ends around the sign change. Renting = `neverCoast.age` when ρ = 0 (shared code). Buying is
+  the first age the household is FI **and stays FI through the purchase**: an FI age before b counts
+  only if every point up to b (the balance just after closing at b) stays at or above `FIRE_own`;
+  otherwise the search restarts at the last point up to b below target, interpolating from the
+  post-closing gap at b.
+- **Meets the coast line, renting vs buying**: for buying, the coast line at age k is the balance that,
+  with no base saving from k (housing deltas, the purchase if k ≤ b, and no draw, as in 4.1), reaches
+  `FIRE_own` at R; it is affine in the starting balance, so one zero-start run gives it:
+  `coastBuy(k) = (FIRE_own − B⁰_R(k)) / (1+r)^(R−k)`, computed without the floor, shown clamped at 0.
+- **Earliest coast age (both), renting vs buying**: `earliestCoast` (4.4) with `buyPath` and `FIRE_own`.
+  A/B-alone rows stay renting-only.
+- **At R:** portfolio renting vs buying; **net worth** renting = portfolio (+ credited cash) vs buying =
+  portfolio + `V(R)(1 − sellPct)` − remaining balance − any cash-short debt (11.2); home value and loan
+  left shown in "How this is worked out".
+- **Breakeven home growth** `g*` and **breakeven mortgage rate** `i*`: the value at which net worth at
+  R ties (`NW_own = NW_rent`), everything else held. Bisection to 0.01 point on [−10%, 10%] and
+  [0%, 20%]. No sign change → "buying is ahead even at −10%/yr" / "renting stays ahead up to 10%/yr"
+  (rate: "buying ahead even at 20%" / "renting ahead even at 0%").
+- **Years owning costs more** (count of a in [b, R) with Δ > 0) and **years short** (deficit > 0) with
+  the total deficit.
+- `cashShort`, `afford` (first whole age ≥ b at which the renting path's balance ≥ cash at closing, or
+  null), warnings: `buyAfterRet`, `buyNow`, `cashShort`, `deficit`, `noPrice` (price 0).
+
+### 11.5 UI
+
+A native `<details id="d-house">` in the inputs column after HSA, same pattern as the other rows:
+summary title "Buying a home" and a live value from `ui.js houseSummary(res, h)`:
+
+| State | Summary value |
+|---|---|
+| off | "off" (so the row reads "Buying a home · off") |
+| retAge ≤ age | "fix the ages first" |
+| buyAge ≥ retAge | "buy before R to compare" |
+| price 0 | "add a home price" |
+| cash short | "Buy at b: $X short at closing" |
+| both FI ages found | "Buy at b: FI 1.2 yrs later" / "… earlier" / "same FI age" (\|diff\| < 0.05); short enough for 375px, the verdict inside says "than renting" |
+| otherwise | "Buy at b: $X less (more) at R" (net worth) |
+
+Inside, top to bottom: the switch "Compare buying a home" (with "Off: nothing on the page changes");
+when on, the result first, kept short: a verdict sentence matching the summary (plain words, whole
+years: "about 14 years later than renting (88 instead of 74)"), then a plain two-column list "Renting |
+Buying" with hairlines and only the essentials: housing a month at first, cash at closing,
+"Financially independent at" (fine note "saving at full pace, never coasting"; one decimal), net worth
+at R (fine note "home counted after selling costs"); the rent-growth and cash-short lines (11.2, 11.3)
+under it when they apply. Each buying value has a delta in words; the arrow follows the number (▲ more
+or later, ▼ less or earlier) and the colour says good or bad for buying, never colour alone. Then a
+collapsed `<details>` "How this is worked out" (summary e.g. "P&I $X/mo · owning costs more every
+year") holding the rest of the list (meets the coast line, earliest coast age, portfolio at R, the two
+FIRE numbers) and the notes (owning cost split, years owning costs more, "every year until R" when all
+of them, the deficit "the $X gap is assumed to come out of your pay, not your portfolio", the home at R,
+the cash fund credit, the FIRE-number assumption, the bridge line). Then the inputs (buy age, price,
+down + source segmented, rate, term segmented, rent), then a nested `<details>` "Costs and growth"
+(summary "closing 3% · selling 6% · tax 0.9% · insurance $X · upkeep 1% · growth 0.5%") with closing,
+selling, tax, insurance, maintenance, mortgage insurance (PMI), appreciation, rent growth; a nested
+"Breakeven" (summary "ties at home prices +4.5%/yr or a 2.2% rate") and a nested "Caveats" (11.7). When
+off, the inputs are hidden, not cleared. An error inside opens it (section 3 rule). US spelling
+("favors").
+
+**Main chart (when on):** a **"Buy a home"** line = the buying path's portfolio (equity not
+included), solid `--c4` (#a0549a / dark #b874b0, the validated HSA step), 2.25px, drawn from b to R,
+with the drop at b drawn as a vertical step and a 7px square marker (surface halo) at the post-purchase
+point labelled "buy at b" through the shared label placer: beside the square first, then 24–66px above
+it with a thin leader, clear of the lines bunched near $0; if nothing fits, no label. A 14px tick at
+x(R), centred on the end of the buy line, marks `FIRE_own` when it differs from the FIRE line by more
+than 8px, labelled "FIRE if you buy $X" just inside the retirement line, else at the left by the axis,
+else right of the tick, each clear of every placed label and line; if none fits, the label is dropped
+and the legend entry carries it. Its key goes under "Other lines" ("Buy a home at b (portfolio, not the
+house)", plus " · FIRE if you buy $X" when the label was dropped). The readout adds "Buying $X" when it
+differs from Projected, at rest too (its value at R; it wraps at 375px); the table gains "Buying" and
+"Home equity" columns (to R), and at ≤ 480px hides "Stop today" to make room (the note says so). Stop today, never
+coast, the sparkline, the heatmap and the hero/KPIs stay the renting plan. Bump `sw.js` to
+`coast-fire-v6`.
+
+### 11.6 Edge cases
+
+| Case | Behavior |
+|---|---|
+| buyAge ≤ age | Bought at the current age (k = 0); hint "Buying today." |
+| buyAge ≥ retAge | Not modeled (after retirement there is no projection); field note, summary "buy before R to compare", no chart line. |
+| Already own a home | Not supported; the buy-age hint says so. |
+| downPct < 3 | Clamped to 3 (no 100% loan; 97% is the conventional maximum). downPct = 100: cash purchase, no loan or PMI. |
+| mortRate = 0 | `PMT = L / N`, balance falls linearly. |
+| π = 0 or < 0 | Real P&I constant (or rising); formulas hold. |
+| r = 0 | Annuity and PV terms use the r = 0 forms (no division by zero). |
+| Term ends after R | Remaining payments enter `FIRE_own` as `M_R`; net worth subtracts the balance. |
+| Cash at closing > portfolio | `cashShort`; path floors at 0; summary leads with the shortfall; "You'd have enough at {afford}" with an Apply button when found. |
+| Owning costs exceed planned saving | Contributions floor at 0, deficit years and total shown ("assumed paid from pay"). |
+| Coasting or Barista draw before / after b | Unchanged; deltas still apply (coasting households still pay more or save the difference). |
+| retAge < 59½ (bridge) | The bridge (section 5) stays on the renting plan; the house section adds one line "Buying, your portfolio at R is $X (renting $Y); the bridge uses the renting plan." Down payments from pre-tax money: hint above. |
+| Non-finite | "Too large to show". |
+
+### 11.7 Caveats (plain words, in the section)
+
+Not financial advice. Mortgage interest and property-tax deductions are not modeled (most households
+take the standard deduction); nor capital-gains tax on a sale, moving, refinancing or extra payments.
+Selling costs count only in the net-worth line; a home is hard to sell quickly or in pieces, and its
+equity can't pay for groceries in retirement without selling or borrowing. The median home and the
+median asking rent are different kinds of housing (renters' homes are usually smaller), so enter the
+rent for a home like the one you'd buy. Repairs come in lumps, not 1% a year. Rates, prices and rents
+vary hugely by place. Both FIRE numbers hold housing costs where they are at retirement, so rent and
+home price growth after that are left out (11.3).
+
+### 11.8 Tests (added to `tests/run_tests.js`)
+
+- 0% real return, 0% inflation, 0% mortgage rate, no tax/insurance/maintenance/PMI, rent equal to the
+  payment: buying path = renting path minus the cash at closing; equity = down payment + principal paid.
+- Payment: 300,000 at 6% for 30 years → 1,798.65/mo; at 0% → 833.33/mo; 15-year term.
+- Real P&I falls by (1 + π) a year; PMI stops at the first year with scheduled balance ≤ 78% of price,
+  pro-rated by month in the year it crosses (10.5% down at 0%: 11 of 12 months); none at 20% down.
+- FI buying stays FI through the purchase: defaults with 400,000 invested, retire at 66, buy at 64 →
+  renting FI near 63, buying after 64 (the post-closing balance is below `FIRE_own(64)`); with more
+  invested, an FI age before b that closing keeps stands.
+- Cash short: the shortfall is a debt in buying net worth (r = 0: buy NW = portfolio + home after
+  selling costs − 14,000).
+- Δ > C floors contributions at 0 and reports the deficit; Δ < 0 adds to contributions while coasting.
+- `FIRE_own` with the loan paid off by R = (spend − rent + carry)/swr; with years left adds `M_R`.
+- Breakevens: net worth ties at the returned `g*` and `i*` (within 1 dollar); no-sign-change messages.
+- Edge cases of 11.6; hash round trip with the sixteen new keys; `houseSummary` strings of 11.5;
+  privacy scan allowlist gains every new default and source amount below.
+
+### 11.9 Defaults and citations (verified 2026-10-17)
+
+With these defaults (buy at 45, 10% down from invested assets) the prototype gives: cash at closing
+54,340; owning about 3,588/mo at first vs 1,530 rent; 20 years of owning costing more; portfolio at 65
+about 297,000 buying vs 1,009,932 renting; net worth at 65 about 594,000 buying (home after selling
+costs, loan left) vs 1,009,932; `FIRE_own` about 1.72M vs 1.78M; breakeven growth about 4.5%/yr real,
+breakeven rate about 2.2% (2.22 with PMI pro-rated by month). Tests fix the exact values.
+
+| Input | Default | Source |
+|---|---|---|
+| Home price | **418,000** | NAR existing-home sales, September 2026 (released 2026-10-13): median existing-home price 417,500, rounded to the slider step (Rate.com recap of the release, https://www.rate.com/mortgage/resource/housing-report-10-13-26; NAR release page https://www.nar.realtor/newsroom/existing-home-sales-fell-2-0-in-september; August 2026: 429,100, Haver Analytics https://www.haver.com/articles/u-s-existing-home-sales-decline-in-august-to-lowest-level-since-june-25). |
+| Mortgage rate | **7.4%** | Freddie Mac PMMS 30-year fixed, week of 2026-10-15: 7.40% (FRED MORTGAGE30US, https://fred.stlouisfed.org/series/MORTGAGE30US). |
+| Term | **30** | The PMMS benchmark loan. |
+| Down payment | **10%** | NAR 2025 Profile of Home Buyers and Sellers: median down payment of first-time buyers 10% (repeat buyers 23%); the default household rents, so it would be a first-time buyer (Virginia Realtors summary, https://virginiarealtors.org/2025/12/08/key-takeaways-from-nars-2025-profile-of-home-buyers-and-sellers). |
+| Buy at age | **45** | Placeholder a few years ahead (the default household is 42; NAR 2025 Profile: median first-time buyer age 40, https://www.nar.realtor/newsroom/first-time-home-buyer-share-falls-to-historic-low-of-21-median-age-rises-to-40). |
+| Rent | **1,530/mo** | Census Housing Vacancy Survey, Q2 2026: "the median asking rent for vacant for rent units was" 1,531 (https://www.census.gov/housing/hvs/files/qtr226/Q226press.pdf). |
+| Rent growth | **0.0%** real | Lyons, Shertzer & Gray, NBER w35124 (April 2026): a consistent rent index back to 1914 "eliminates the long-run decline in real rents", i.e. rents roughly track inflation (https://www.nber.org/papers/w35124). |
+| Closing costs | **3%** | Chase: closing costs "range from 2-5% of the loan amount" (https://www.chase.com/personal/mortgage/education/financing-a-home/how-much-are-closing-costs); LodeStar 2025 report: title, settlement, recording and transfer taxes alone average 1.04% of price (4,528), lender fees and prepaids excluded (https://www.lodestarss.com/?p=17088). 3% of price sits in the 2–5%-of-loan range at 10% down. |
+| Selling costs | **6%** | Agent commissions about 5–6% in total (RealTrends average 5.32% in 2022, HousingWire https://www.housingwire.com/articles/average-real-estate-commission-rate-at-highest-level-since-2013/; buy side about 2.4–2.7% since the 2024 NAR settlement) plus seller closing costs. |
+| Property tax | **0.9%**/yr | ATTOM 2025 property tax analysis (2026-04-09): "Nationwide, the effective tax rate for single-family homes in 2025 was 0.9 percent" (https://www.attomdata.com/news/market-trends/home-sales-prices/2025-annual-tax-report). |
+| Insurance | **1,600/yr** | NAIC homeowners report (2022 data, released 2025-05-21) via the Insurance Information Institute: average HO-3 premium 1,569 in 2022, rounded up (https://www.iii.org/fact-statistic/facts-statistics-homeowners-and-renters-insurance). Premiums have risen since; the hint says so. |
+| Maintenance | **1%**/yr | Fannie Mae: budget "1% to 4% of your home's value per year" (https://yourhome.fanniemae.com/own/how-build-your-maintenance-and-repair-budget); the low end, for a typical resale home. |
+| PMI | **0.6%**/yr | Freddie Mac: "approximately between $30 and $70 per month for every $100,000 borrowed" = 0.36–0.84%/yr, midpoint 0.6% (https://myhome.freddiemac.com/buying/breaking-down-pmi); same page: automatic termination at a scheduled 78% of original value. |
+| Home price growth | **0.5%**/yr real | Shiller's index: real US home prices about 0.7%/yr over the period homeowners recall, and close to trendless since 1890 (0.1%/yr 1890–1996) (Wikipedia, Case–Shiller index, citing *Irrational Exuberance*, https://en.wikipedia.org/wiki/Case%E2%80%93Shiller_index); 0.5% sits between. |
+| Down payment from | **Invested assets** | The conservative case: the money stops compounding in the portfolio. |
 
 ## Sources
 
@@ -365,5 +624,7 @@ page https://www.irs.gov/retirement-plans/substantially-equal-periodic-payments;
 2022-6 Can Help 72(t) Early Distribution Planning"
 https://www.kitces.com/blog/rule-72t-sepp-calculate-payments-rmd-avoid-penalty-tax-early-ira-withdrawals-notice-2022-6/;
 BLS (earnings, CPS 11b, CE via FRED); Federal Reserve SCF 2022; Vanguard How America Saves 2025;
-CRS R48051; Devenir 2025 year-end HSA report; SSA Trustees economic assumptions; WalletBurst,
+CRS R48051; Devenir 2025 year-end HSA report; SSA Trustees economic assumptions; for the home
+(section 11.9): NAR, Freddie Mac PMMS and PMI pages, Census HVS, NBER w35124, Chase, LodeStar, RealTrends,
+ATTOM, NAIC via III, Fannie Mae, Shiller; WalletBurst,
 Pelcro and Liberated Stock Trader Coast FIRE calculators.

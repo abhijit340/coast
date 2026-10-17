@@ -75,6 +75,7 @@
         <li><i class="key k-keep"></i><span id="keep-key">Keep saving, never coast</span></li>
         <li><i class="key k-stop"></i><span id="stop-key">If you stop today</span></li>
         <li><i class="key k-zone"></i><span id="zone-key">Could coast</span></li>
+        <li id="buy-key-li" hidden><i class="key k-buy"></i><span id="buy-key">Buy a home (portfolio, not the house)</span></li>
       </ul>
       <div class="readout" id="readout" aria-live="polite"></div>
       <div class="chart" id="chart">
@@ -136,6 +137,60 @@
             <button type="button" id="seg-self" aria-pressed="false">Self-only<small>$4,400 each</small></button>
           </div>
           <div id="hsa-fields"></div>
+        </div>
+      </details>
+    </section>
+
+    <section class="group house-g" aria-label="Buying a home">
+      <details class="dis" id="d-house">
+        <summary class="sum"><span class="sum-t">Buying a home</span><span class="sum-v" id="sv-house"></span></summary>
+        <div class="dis-body">
+          <div class="toggle-row inline-toggle">
+            <div class="grow"><span class="tlabel" id="house-l">Compare buying a home</span><p class="fine" id="house-hint">Off: nothing on the page changes.</p></div>
+            <button type="button" class="switch" id="sw-house" role="switch" aria-checked="false" aria-labelledby="house-l" aria-describedby="house-hint"><i></i></button>
+          </div>
+          <div id="house-on" hidden>
+            <div id="house-out"></div>
+            <details class="dis sub" id="d-house-how" hidden>
+              <summary class="sum"><span class="sum-t">How this is worked out</span><span class="sum-v" id="sv-house-how"></span></summary>
+              <div class="dis-body" id="house-how"></div>
+            </details>
+            <h3 class="mini-title house-in-t">The home</h3>
+            <div id="house-fields"></div>
+            <div class="seg" role="group" aria-label="Down payment comes from">
+              <button type="button" id="seg-down-inv" aria-pressed="true">Invested assets<small>leaves the portfolio</small></button>
+              <button type="button" id="seg-down-cash" aria-pressed="false">Separate cash<small>portfolio untouched</small></button>
+            </div>
+            <p class="fine house-seg-note" id="down-hint"></p>
+            <div id="house-rate-fields"></div>
+            <div class="seg" role="group" aria-label="Mortgage term">
+              <button type="button" id="seg-term-15" aria-pressed="false">15 years</button>
+              <button type="button" id="seg-term-30" aria-pressed="true">30 years</button>
+            </div>
+            <div id="house-rent-fields"></div>
+            <details class="dis sub" id="d-house-costs">
+              <summary class="sum"><span class="sum-t">Costs and growth</span><span class="sum-v" id="sv-house-costs"></span></summary>
+              <div class="dis-body" id="house-cost-fields"></div>
+            </details>
+            <details class="dis sub" id="d-house-be">
+              <summary class="sum"><span class="sum-t">Breakeven</span><span class="sum-v" id="sv-house-be"></span></summary>
+              <div class="dis-body" id="house-be"></div>
+            </details>
+            <details class="dis sub" id="d-house-cav">
+              <summary class="sum"><span class="sum-t">Caveats</span><span class="sum-v">not advice · taxes · selling</span></summary>
+              <div class="dis-body">
+                <ul class="caveats">
+                  <li>Not financial advice: a model with stated assumptions. Rates, prices and rents vary hugely by place.</li>
+                  <li>Mortgage-interest and property-tax deductions aren't modeled (most households take the standard deduction); nor capital-gains tax on a sale, moving, refinancing or extra payments.</li>
+                  <li>Selling costs count only in the net-worth line. A home is hard to sell quickly or in pieces, and its equity can't pay for groceries in retirement without selling or borrowing against it, so it is never counted toward your FIRE number.</li>
+                  <li>When owning costs more than you save, the extra is assumed to come out of your pay, not your portfolio.</li>
+                  <li>The median home and the median asking rent are different kinds of housing (rented homes are usually smaller), so enter the rent for a home like the one you'd buy.</li>
+                  <li>Both FIRE numbers hold housing costs where they are at retirement: rent growth and home price growth after that aren't included, so with either above 0% both numbers are a little low, and not by the same amount.</li>
+                  <li>Repairs come in lumps, not 1% a year. Taking a down payment from a 401(k) or IRA before 59½ usually costs tax and a penalty; not modeled.</li>
+                </ul>
+              </div>
+            </details>
+          </div>
         </div>
       </details>
     </section>
@@ -253,6 +308,7 @@
               <li><strong>Inflation 2.4%:</strong> the Social Security Trustees' long-run intermediate CPI assumption (<a href="https://www.ssa.gov/OACT/TR/2023/V_B_econ.html" rel="noopener">SSA</a>).</li>
               <li><strong>Return 7%, withdrawal 4%, retirement at 65:</strong> common planning figures (WalletBurst's default return, the Trinity study, Medicare age).</li>
               <li><strong>Bridge and coast age:</strong> pre-tax share 90%, since Roth money is only about 7% of US IRA and workplace-plan assets (<a href="https://q3adv.com/tax-free-retirement-gap-report/" rel="noopener">Q3 Advisors, from ICI data</a>), rounded down to leave room for the HSA and taxable money; 72(t) share 50% (an even split); 72(t) rate 5% (the floor of the maximum IRS Notice 2022-6 allows); coast age 55 (a placeholder midpoint, used only when you switch it on).</li>
+              <li><strong>Buying a home (off until you switch it on):</strong> price $418,000, the September 2026 median existing-home price of $417,500 rounded (<a href="https://www.nar.realtor/newsroom/existing-home-sales-fell-2-0-in-september" rel="noopener">NAR</a>); mortgage 7.4%, Freddie Mac's 30-year average in mid-October 2026 (<a href="https://fred.stlouisfed.org/series/MORTGAGE30US" rel="noopener">FRED</a>); 10% down, the median for first-time buyers (NAR 2025 Profile of Home Buyers and Sellers); rent $1,530/mo, the Q2 2026 median asking rent of $1,531 (<a href="https://www.census.gov/housing/hvs/files/qtr226/Q226press.pdf" rel="noopener">Census</a>); property tax 0.9%, the 2025 effective rate (<a href="https://www.attomdata.com/news/market-trends/home-sales-prices/2025-annual-tax-report" rel="noopener">ATTOM</a>); insurance $1,600/yr, the NAIC 2022 average of $1,569 rounded (<a href="https://www.iii.org/fact-statistic/facts-statistics-homeowners-and-renters-insurance" rel="noopener">Insurance Information Institute</a>); maintenance 1%, the low end of Fannie Mae's 1–4% (<a href="https://yourhome.fanniemae.com/own/how-build-your-maintenance-and-repair-budget" rel="noopener">Fannie Mae</a>); PMI 0.6%, the middle of Freddie Mac's $30–$70 a month per $100,000 (<a href="https://myhome.freddiemac.com/buying/breaking-down-pmi" rel="noopener">Freddie Mac</a>); closing 3% and selling 6% (<a href="https://www.chase.com/personal/mortgage/education/financing-a-home/how-much-are-closing-costs" rel="noopener">Chase</a>, agent commissions about 5–6%); home prices 0.5%/yr above inflation, between Shiller's long-run estimates; rent growth 0% above inflation (<a href="https://www.nber.org/papers/w35124" rel="noopener">NBER w35124</a>).</li>
               <li><strong>2026 limits:</strong> 401(k) $24,500, IRA $7,500 (<a href="https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500" rel="noopener">IRS</a>); HSA $4,400 self-only, $8,750 family (Rev. Proc. 2025-19).</li>
             </ul>
             <p>With these typical numbers the household does <em>not</em> reach its FIRE number by 65. That's a realistic starting point, not a mistake.</p>

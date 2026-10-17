@@ -123,10 +123,61 @@
     return { title: "Early-access bridge", value: chip.text, chip, teaser };
   }
 
+
+  // ---------- buying a home (SPEC 11.5) ----------
+
+  const pctShort = (x) => +(+x).toFixed(2) + "%"; // 0.9%, 1%, 0.5%
+  const yrs = (d) => { const t = Math.abs(d).toFixed(1); return t + (t === "1.0" ? " yr" : " yrs"); };
+
+  // The row's live value: off, a reason it can't compare yet, or the verdict.
+  function houseSummary(res, h) {
+    const v = res.inputs;
+    if (!v.houseOn) return "off";
+    if (badAges(res) || h.reason === "badAges") return "fix the ages first";
+    if (h.reason === "buyAfterRet") return `buy before ${v.retAge} to compare`;
+    if (h.reason === "noPrice") return "add a home price";
+    const at = `Buy at ${h.b}`;
+    if (h.cashShort > 0) return `${at}: ${cmp(h.cashShort)} short at closing`;
+    const fr = h.fi.rent.age, fb = h.fi.buy.age;
+    if (fr !== null && fb !== null) {
+      const d = fb - fr;
+      // Short enough to fit the row at 375px; the verdict inside says "than renting".
+      if (Math.abs(d) < 0.05) return `${at}: same FI age`;
+      return `${at}: FI ${yrs(d)} ${d > 0 ? "later" : "earlier"}`;
+    }
+    const n = h.atRet.buyNW - h.atRet.rentNW;
+    return `${at}: ${cmp(Math.abs(n))} ${n < 0 ? "less" : "more"} at ${v.retAge}`;
+  }
+
+  // The nested "Costs and growth" row.
+  function houseCostsSummary(v) {
+    return `closing ${pctShort(v.closePct)} · selling ${pctShort(v.sellPct)} · tax ${pctShort(v.propTax)} · insurance ${money(v.insure)} · upkeep ${pctShort(v.maint)} · growth ${pctShort(v.apprec)}`;
+  }
+
+  // The nested "How this is worked out" row: the payment and how often owning costs more.
+  function houseHowSummary(h, R) {
+    const before = Math.max(0, R - h.b), n = h.yearsCostMore;
+    const often = n === 0 ? "owning costs less every year" : n === before ? "owning costs more every year" : `owning costs more ${n} of ${before} yrs`;
+    return (h.payment > 0.5 ? `P&I ${money(h.first.pi)}/mo · ` : "") + often;
+  }
+
+  // The nested "Breakeven" row: where net worth at R ties, or which side stays ahead.
+  function breakevenSummary(h) {
+    const g = h.breakeven.growth, i = h.breakeven.rate;
+    const ties = [], ahead = [];
+    if (g.value !== null) ties.push(`home prices ${g.value >= 0 ? "+" : "−"}${Math.abs(g.value).toFixed(1)}%/yr`);
+    else if (g.side) ahead.push(g.side === "buy" ? "buying ahead at any growth" : "renting ahead at any growth");
+    if (i.value !== null) ties.push(`a ${i.value.toFixed(1)}% rate`);
+    else if (i.side) ahead.push(i.side === "buy" ? "buying ahead at any rate" : "renting ahead at any rate");
+    const parts = [];
+    if (ties.length) parts.push("ties at " + ties.join(" or "));
+    return parts.concat(ahead).join(" · ") || "not found";
+  }
+
   const api = {
     UI_KEY, HINT_KEY, parseOpen, withOpen, isOpenIn,
     nudgeLine, spoken, kpiSummary, contribSummary, ecSummary, sparkSummary, partnerSummary, afterCoast, heatSummary, hsaSummary,
-    drawSummary, assumeSummary, bridgeSummary,
+    drawSummary, assumeSummary, bridgeSummary, houseSummary, houseCostsSummary, houseHowSummary, breakevenSummary,
   };
   root.CoastUI = api;
   if (typeof module === "object" && module.exports) module.exports = api;

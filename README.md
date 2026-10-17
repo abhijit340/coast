@@ -1,5 +1,7 @@
 # Coast FIRE
 
+Live at https://coast-aj.pages.dev (Cloudflare Pages; every push to main redeploys).
+
 A two-income Coast FIRE calculator. It answers: *if we both stopped saving for retirement, would what we have grow into enough by the time we retire? If not yet, when could we stop, and what would it take?* It also plans an early-retirement bridge to 59½ with Rule 72(t) payments and a Roth conversion ladder.
 
 Live at: `https://<project>.pages.dev/` (Cloudflare Pages, site root = repo root).
@@ -18,6 +20,7 @@ The first screen holds only the answer and the chart. Everything else is still t
 - **Earliest coast age:** solved for both together and for each partner alone (the other's plan held as set), each with an **Apply** button that sets the coast switches and ages.
 - **Your path (main chart):** your plan, the coast line, "if you stop today", and a dashed teal **Keep saving, never coast** line: everyone keeps their full saving for good (no coast ages, no Barista draw), working past the retirement age if needed. A dot marks where it reaches the FIRE number ("Keep saving → retire at 75"), and the age axis runs past retirement far enough to show it. The **Never coast** tile says "you could retire at about N" and how that compares with your chosen age (or "Not by 100"). Drag or use the arrow keys for a readout; **Show as a table** lists every age.
 - **What if returns or withdrawals differ?** A real table: rows are the investment return before inflation, columns the safe withdrawal rate, each header with its unit, and a caption saying what a cell means (the earliest age you could both stop saving). Shade = years of coasting, hatched = can't reach the FIRE number even saving the whole way (the % shows how much you'd have), and the cell for your own inputs is outlined and labelled "your inputs". A legend under the table explains all three.
+- **Buying a home** (off by default; one collapsed row after the HSA): switch it on to compare buying a home at an age against renting. Price, down payment (from invested money or a separate cash fund), mortgage rate and 15/30-year term, rent today, and under "Costs and growth" closing and selling costs, property tax, insurance, maintenance, mortgage insurance (PMI), home-price and rent growth above inflation. Each year the difference between owning (payment, tax, insurance, upkeep, PMI) and rent comes out of, or adds to, saving. Your retirement spending is taken to include today's rent; an owner's FIRE number swaps the rent for the home's running costs plus any mortgage still due. The row's summary gives the verdict ("Buy at 45: FI 13.6 yrs later"); inside, a short renting vs buying list (monthly cost, cash at closing, FI age, net worth at retirement), then "How this is worked out" (coast ages, portfolio at retirement, the two FIRE numbers and the notes), breakeven home growth and mortgage rate, and caveats. The chart adds a "Buy a home" line (the portfolio, never the house), with a column for it and home equity in the table. Not advice; taxes and the mortgage-interest deduction aren't modeled.
 - **Retire before 59½:** shown when the retirement age is under 59½ (otherwise a teaser card). Splits pre-tax money into a 72(t) IRA and a ladder IRA, then shows each year to 59½: 72(t) (fixed, locked), taxable, Roth basis, ripe ladder rungs, and any gap year with the amount.
 - Inputs are remembered in this browser only (`localStorage` key `coastfire.v2`). **Reset** (top right, or below the inputs) restores the defaults, with Undo. **Copy link** puts the numbers after `#` (on a phone, the share sheet), e.g. `#a=42&r=65&b=45000&s=71000&sa=62608&ka=4800`. Opening a link shows its numbers with a banner and leaves your saved numbers alone until you edit or keep them. v1 links still open.
 
@@ -30,7 +33,7 @@ The first screen holds only the answer and the chart. Everything else is still t
 | `calc.js` | All the math, pure functions, no DOM. `window.CoastFire` in the browser, `require("./calc.js")` in node. Holds the 2026 limits and the IRS Single Life Table (ages 30–60) |
 | `ui.js` | The one-line summaries on collapsed rows and the saved open/closed state; pure, tested in node |
 | `app.js` | Builds the fields, keeps boxes and sliders in sync, writes results, draws the SVG charts, saves inputs |
-| `sw.js` | Service worker: network first, saved copy after 3 s or offline. Bump `CACHE` (now `coast-fire-v5`) whenever the files change |
+| `sw.js` | Service worker: network first, saved copy after 3 s or offline. Bump `CACHE` (now `coast-fire-v6`) whenever the files change |
 | `manifest.webmanifest`, `icons/` | Home-screen install. `python tools/make_icons.py` (needs Pillow) redraws the icons |
 | `privacy.html` | Privacy note |
 | `tests/run_tests.js` | Tests |
@@ -42,7 +45,7 @@ The first screen holds only the answer and the chart. Everything else is still t
 node tests/run_tests.js
 ```
 
-No packages needed. Hand-checked cases for two incomes, coast downshifts, the family vs self-only HSA, the Barista draw, the earliest-coast-age solver (together and each partner alone), the 72(t) payment ($1,000,000 at 45, 5%, life expectancy 41.0 → $57,822.29), and a bridge timeline with gap years and ladder rungs; closed-form and brute-force cross-checks; limits, clamps, the URL hash, slider scale and formatting; that the defaults equal the cited table and the Single Life values match the regulation; and a privacy scan that fails on spreadsheets or on any dollar amount or 4+ digit number not on its allowlist.
+No packages needed. Hand-checked cases for two incomes, coast downshifts, the family vs self-only HSA, the Barista draw, the earliest-coast-age solver (together and each partner alone), the 72(t) payment ($1,000,000 at 45, 5%, life expectancy 41.0 → $57,822.29), a bridge timeline with gap years and ladder rungs, and rent vs buy (mortgage payment and balance, PMI drop-off at 78%, owning costs flowing into saving with a floor at 0, the owner's FIRE number, breakevens that tie net worth, equity after selling costs, and that switching it off changes nothing else); closed-form and brute-force cross-checks; limits, clamps, the URL hash, slider scale and formatting; that the defaults equal the cited table and the Single Life values match the regulation; and a privacy scan that fails on spreadsheets or on any dollar amount or 4+ digit number not on its allowlist.
 
 To preview, serve the folder (`python -m http.server 8000`) and open http://localhost:8000/.
 
@@ -66,6 +69,8 @@ US medians or typical figures, never anyone's own numbers (a test enforces it). 
 | Spending | $71,000 | BLS CE 2024, two-person households: $80,830 − $9,652 pension/Social Security contributions |
 | Inflation | 2.4% | Social Security Trustees' long-run intermediate CPI assumption |
 | Return / withdrawal / retirement | 7% / 4% / 65 | Common planning figures |
+| Home (when on) | $418,000 · 10% down · 7.4% · 30 yrs · rent $1,530/mo | NAR median existing-home price (Sep 2026), NAR first-time buyers, Freddie Mac PMMS, Census median asking rent |
+| Home costs | tax 0.9% · insurance $1,600 · upkeep 1% · PMI 0.6% · closing 3% · selling 6% · growth 0.5% real · rent growth 0% | ATTOM, NAIC via III, Fannie Mae, Freddie Mac, Chase, RealTrends, Shiller, NBER (SPEC section 11.9) |
 | 2026 limits | $24,500 / $7,500 / $4,400 & $8,750 | IRS; Rev. Proc. 2025-19 |
 
 With these numbers the household does not reach its FIRE number by 65; the page treats that as a designed state, not an error.

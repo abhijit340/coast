@@ -47,8 +47,12 @@ const TABLE = {
   salA: 62608, kA: 4800, empA: 4.3, rothA: 3200, coastOnA: 0, coastAgeA: 55, afterA: 0,
   salB: 62608, kB: 4800, empB: 4.3, rothB: 3200, coastOnB: 0, coastAgeB: 55, afterB: 0,
   preShare: 90, sepShare: 50, sepRate: 5, basis: 0, taxable: 0, lead: 0,
+  // the home, off by default (SPEC 11.9)
+  houseOn: 0, buyAge: 45, price: 418000, downPct: 10, downFrom: 1, mortRate: 7.4, term: 30,
+  pmi: 0.6, closePct: 3, sellPct: 6, propTax: 0.9, insure: 1600, maint: 1, apprec: 0.5,
+  rent: 1530, rentGrowth: 0,
 };
-check("defaults equal the cited table (SPEC 8)", J(CF.DEFAULTS) === J(TABLE), J(CF.DEFAULTS));
+check("defaults equal the cited table (SPEC 8, 11.9)", J(CF.DEFAULTS) === J(TABLE), J(CF.DEFAULTS));
 check("defaults are frozen", Object.isFrozen(CF.DEFAULTS));
 check("project({}) uses the defaults", J(CF.project({}).inputs) === J(TABLE));
 check("2026 limits: 401(k) 24,500, IRA 7,500, HSA 4,400 / 8,750",
@@ -480,6 +484,221 @@ check("nice rounding", CF.niceRound(1234567, 1000) === 1250000 && CF.niceRound(4
   check("bridge row at 65: one invitation, no chip or teaser", b65.title === "Retiring before 59½?" && b65.chip === null && b65.teaser === "", J(b65));
 }
 
+// ---------- buying a home: rent vs buy (SPEC 11) ----------
+{
+  // Mortgage payment and balance.
+  eq("mortgage: 300,000 at 6% for 30 years -> 1,798.65/mo", CF.mortgagePayment(300000, 0.06, 30), 1798.65);
+  eq("mortgage: 300,000 at 0% for 30 years -> 833.33/mo", CF.mortgagePayment(300000, 0, 30), 833.33);
+  eq("mortgage: 300,000 at 6% for 15 years -> 2,531.57/mo", CF.mortgagePayment(300000, 0.06, 15), 2531.57);
+  check("mortgage: no loan, no payment", CF.mortgagePayment(0, 0.06, 30) === 0 && CF.loanBalance(0, 0.06, 30, 12) === 0);
+  // Balance: the closed form against paying it month by month.
+  let bal = 300000;
+  const pmt6 = CF.mortgagePayment(300000, 0.06, 30);
+  for (let t = 1; t <= 120; t++) bal = bal * 1.005 - pmt6;
+  eq("mortgage balance after 10 years = month-by-month schedule", CF.loanBalance(300000, 0.06, 30, 120), bal, 1e-6);
+  check("mortgage balance: full before the first payment, 0 when paid off",
+    CF.loanBalance(300000, 0.06, 30, 0) === 300000 && CF.loanBalance(300000, 0.06, 30, 360) === 0 && CF.loanBalance(300000, 0.06, 30, 400) === 0);
+  eq("mortgage balance at 0%: falls in a straight line (300,000 - 120 x 833.33)", CF.loanBalance(300000, 0, 30, 120), 200000, 1e-6);
+
+  // Hand-added base (H0 at 0% real, 0% inflation): 100,000 invested, 28,000/yr, ages 40 -> 50.
+  const HB = { ...H0, nominal: 0, inflation: 0, houseOn: 1, buyAge: 42, price: 120000, downPct: 20, downFrom: 1,
+    mortRate: 0, term: 15, pmi: 0, closePct: 0, sellPct: 0, propTax: 0, insure: 0, maint: 0, apprec: 0,
+    rent: 96000 / 180, rentGrowth: 0 };
+  // Loan 96,000 over 15 years at 0%: 533.33/mo, the same as the rent, so owning costs exactly what renting does.
+  const Z = CF.house(HB);
+  check("zero case: applies, buying at 42, 24,000 down", Z.applies && Z.b === 42 && near(Z.cash, 24000) && near(Z.loan, 96000), J([Z.applies, Z.b, Z.cash]));
+  eq("zero case: payment 96,000 / 180 months", Z.payment, 96000 / 180, 1e-9);
+  check("zero case: owning costs what renting does every year", Z.points.every((p) => Math.abs(p.delta) < 1e-6));
+  check("zero case: buying path = renting path minus the cash at closing from 42",
+    Z.points.every((p) => near(p.post !== undefined ? p.post : p.balance, T1.points[p.age - 40].balance - (p.age >= 42 ? 24000 : 0))));
+  eq("zero case: portfolio at 50 = 380,000 - 24,000", Z.atRet.buyPortfolio, 356000);
+  // Equity = down payment + principal paid: 24,000 + 96 payments x 533.33 = 24,000 + 51,200.
+  eq("zero case: equity at 50 = down + principal paid", Z.points[10].equity, 24000 + 51200, 1e-6);
+  eq("zero case: loan left at 50 = 96,000 - 51,200", Z.atRet.loanLeft, 44800, 1e-6);
+  eq("zero case: net worth buying = 356,000 + 120,000 - 44,800 (no selling costs)", Z.atRet.buyNW, 431200, 1e-6);
+  eq("zero case: net worth renting = the plan's 380,000", Z.atRet.rentNW, 380000, 1e-6);
+  eq("zero case: selling costs come off the home's value in net worth only",
+    CF.house({ ...HB, sellPct: 6 }).atRet.buyNW, 356000 + 120000 * 0.94 - 44800, 1e-6);
+  check("zero case: selling costs leave the portfolio alone", near(CF.house({ ...HB, sellPct: 6 }).atRet.buyPortfolio, 356000));
+
+  // Real P&I falls with inflation: a fixed payment in dollars of the purchase year.
+  const INF = CF.house({ ...HB, nominal: 2, inflation: 2, mortRate: 5 });
+  const iy = (a) => INF.points[a - 40];
+  const T5 = CF.homeTerms(CF.sanitize({ ...HB, nominal: 2, inflation: 2, mortRate: 5 }).values, 0);
+  eq("real P&I: 3 years after buying = first year / 1.02^3", T5.ownAt(45).pi, T5.ownAt(42).pi / Math.pow(1.02, 3), 1e-6);
+  eq("real P&I: first year = 12 x the payment", T5.ownAt(42).pi, 12 * CF.mortgagePayment(96000, 0.05, 15), 1e-6);
+  check("real P&I: 0 once the 15-year loan is paid", T5.ownAt(57).pi === 0 && T5.ownAt(56).pi > 0);
+  eq("real loan balance: the scheduled balance deflated", iy(45).loan, CF.loanBalance(96000, 0.05, 15, 36) / Math.pow(1.02, 3), 1e-6);
+
+  // PMI: 100,000 with 10% down, 0% for 30 years: 90,000 falls 3,000 a year, so it reaches 78,000 (78%) after 4 years.
+  const PM = { ...HB, price: 100000, downPct: 10, term: 30, pmi: 0.5 };
+  const TP = CF.homeTerms(CF.sanitize(PM).values, 0);
+  check("PMI: 0.5% of 90,000 = 450/yr for the 4 years above 78% of the price",
+    [42, 43, 44, 45].every((a) => near(TP.ownAt(a).pmi, 450)) && TP.ownAt(46).pmi === 0 && TP.ownAt(47).pmi === 0,
+    J([42, 43, 44, 45, 46].map((a) => TP.ownAt(a).pmi)));
+  // 10.5% down: the loan falls by 1/360 a month and crosses 78% of the price after 46.3 months, so the
+  // year starting at 45 (months 36-47) has 11 months of PMI, pro-rated; none from 46.
+  const PM2 = { ...PM, downPct: 10.5 }, TP2 = CF.homeTerms(CF.sanitize(PM2).values, 0);
+  check("PMI: pro-rated in the year it ends (11 of 12 months)", TP2.pmiMonths(3) === 11 && TP2.pmiMonths(2) === 12 && TP2.pmiMonths(4) === 0 &&
+    near(TP2.ownAt(45).pmi, 0.005 * TP2.L * 11 / 12, 1e-9) && near(TP2.ownAt(44).pmi, 0.005 * TP2.L, 1e-9) && CF.house(PM2).pmiEnds === 46,
+    J([44, 45, 46].map((a) => TP2.ownAt(a).pmi)));
+  check("PMI: ends at 46 (balance 78,000 = 78%)", CF.house(PM).pmiEnds === 46, String(CF.house(PM).pmiEnds));
+  check("PMI: none with 20% down", CF.homeTerms(CF.sanitize({ ...PM, downPct: 20 }).values, 0).ownAt(42).pmi === 0 && CF.house({ ...PM, downPct: 20 }).pmiEnds === null);
+  check("PMI: none on a cash purchase", CF.house({ ...PM, downPct: 100 }).payment === 0 && CF.house({ ...PM, downPct: 100 }).pmiEnds === null);
+
+  // Cash flow into saving. A cash purchase (50,000, no loan) at 45 with 30,000/yr of insurance and no rent:
+  // owning costs 30,000 more than renting, above the 28,000 saved, so saving stops and 2,000/yr is short.
+  const CFX = { ...HB, buyAge: 45, price: 50000, downPct: 100, insure: 30000, rent: 0 };
+  const X1 = CF.house(CFX);
+  check("cash flow: owning above the saving floors contributions at 0", X1.points.slice(5, 10).every((p) => p.contrib === 0 && near(p.deficit, 2000)));
+  check("cash flow: 5 years short, 10,000 in all, 5 years owning costs more",
+    X1.yearsShort === 5 && near(X1.totalDeficit, 10000) && X1.yearsCostMore === 5 && X1.warnings.includes("deficit"), J([X1.yearsShort, X1.totalDeficit]));
+  eq("cash flow: portfolio 100,000 + 5 x 28,000 - 50,000 (the deficit isn't taken from it)", X1.atRet.buyPortfolio, 190000);
+  // Both coast at 45 (nothing saved after), rent 1,000/mo vs owning 2,000/yr: the 10,000 saved goes in anyway.
+  const X2 = CF.house({ ...CFX, insure: 2000, rent: 1000, coastOnA: 1, coastOnB: 1 });
+  check("cash flow: owning cheaper adds the saving to contributions, even while coasting", X2.points.slice(5, 10).every((p) => near(p.contrib, 10000)));
+  eq("cash flow: 100,000 + 5 x 28,000 - 50,000 + 5 x 10,000", X2.atRet.buyPortfolio, 240000);
+  check("cash flow: no years costing more when owning is cheaper", X2.yearsCostMore === 0 && X2.yearsShort === 0);
+
+  // Retirement spending includes today's rent. A paid-off home: rent 500/mo replaced by
+  // 1% tax + 1% upkeep on 100,000 + 1,000 insurance = 3,000 a year.
+  const FO = { ...HB, buyAge: 45, price: 100000, downPct: 100, rent: 500, propTax: 1, maint: 1, insure: 1000 };
+  const F1 = CF.house(FO);
+  eq("owner's FIRE number, paid off: (20,000 - 6,000 + 3,000) / 5%", F1.fire.own, 340000, 1e-6);
+  eq("renter's FIRE number with no rent growth = the main FIRE number", F1.fire.rent, 400000, 1e-6);
+  // With 10 of 15 years of a 0% mortgage still to pay at 50: 80,000 / 15 = 5,333.33 a year, 10 more years.
+  const F2 = CF.house({ ...FO, downPct: 20, term: 15 });
+  eq("owner's FIRE number with years left adds the payments still due", F2.fire.own, 340000 + 10 * 80000 / 15, 1e-6);
+  eq("owner's FIRE number: mortgage left at R = 53,333.33", F2.fire.mortLeft, 80000 / 15 * 10, 1e-6);
+  // At a real return the remaining payments are discounted: check against the sum written out.
+  const T7 = CF.homeTerms(CF.sanitize({ ...FO, downPct: 20, term: 15, nominal: 6, inflation: 2 }).values, 1.06 / 1.02 - 1);
+  let pv = 0;
+  for (let j = 5; j < 15; j++) pv += 12 * T7.pmt / Math.pow(1.02, j) / Math.pow(1.06 / 1.02, j - 5 + 1);
+  eq("owner's FIRE number: remaining payments discounted at the real return", T7.mortLeft(50), pv, 1e-6);
+  const RG = CF.house({ ...FO, rentGrowth: 1 });
+  eq("renter's FIRE number moves with rent growth", RG.fire.rent, (20000 + 6000 * Math.pow(1.01, 10) - 6000) / 0.05, 1e-6);
+
+  // FI, coast-line and earliest-coast ages, buying vs renting. A 24,000 cash purchase at 42 with
+  // nothing changing each year; FIRE 340,000 both ways (spend 17,000 at 5%, no rent).
+  const AG = { ...HB, spend: 17000, price: 24000, downPct: 100, rent: 0 };
+  const A1 = CF.house(AG), A1r = CF.project(AG);
+  eq("FI age renting = the never-coast age (48 + 16/28)", A1.fi.rent.age, A1r.neverCoast.age, 1e-9);
+  eq("FI age renting: 48.57", A1.fi.rent.age, 48 + 16000 / 28000, 1e-9);
+  // Buying: 76,000 + 28,000 x (a - 40) reaches 340,000 at 49 + 12/28.
+  eq("FI age buying: 49 + 12/28", A1.fi.buy.age, 49 + 12000 / 28000, 1e-9);
+  check("FI age buying: first whole age 50", A1.fi.buy.wholeAge === 50);
+  check("earliest coast: renting 49 (= the main solver), buying 50",
+    A1.earliest.rent.age === 49 && A1r.earliest.both.age === 49 && A1.earliest.buy.age === 50, J(A1.earliest));
+  check("meets the coast line: renting 49 (= the main crossing), buying 50",
+    A1.cross.rent === A1r.crossAge && A1.cross.rent === 49 && A1.cross.buy === 50, J(A1.cross));
+  check("earliest coast buying, not possible: best is the balance saving the whole way",
+    CF.house({ ...AG, spend: 20000 }).earliest.buy.age === null && near(CF.house({ ...AG, spend: 20000 }).earliest.buy.best, 356000));
+
+  // The defaults (SPEC 11.9), switched on.
+  const DH = CF.project({ houseOn: 1 }), HD = CF.house({ houseOn: 1 }, DH);
+  eq("defaults: cash at closing 41,800 down + 12,540 closing", HD.cash, 54340, 1e-6);
+  eq("defaults: owning about 3,588/mo at first", HD.first.total, 3588, 0.5);
+  eq("defaults: rent 1,530/mo", HD.first.rent, 1530, 1e-9);
+  eq("defaults: P&I 2,604.73/mo on 376,200 at 7.4%", HD.first.pi, 2604.73, 0.01);
+  check("defaults: 20 years owning costs more, from 45 to 64", HD.yearsCostMore === 20);
+  eq("defaults: portfolio at 65 buying about 297,000", HD.atRet.buyPortfolio, 297433, 1);
+  eq("defaults: portfolio at 65 renting = the plan's 1,009,932", HD.atRet.rentPortfolio, 1009932, 1);
+  eq("defaults: net worth at 65 buying about 594,000", HD.atRet.buyNW, 594411, 1);
+  eq("defaults: owner's FIRE number about 1.72M", HD.fire.own, 1715273, 1);
+  check("defaults: FI renting 74.3 (= never coast), buying 87.9",
+    near(HD.fi.rent.age, DH.neverCoast.age, 1e-9) && near(HD.fi.buy.age, 87.88, 0.01) && HD.fi.buy.wholeAge === 88, J(HD.fi));
+  check("defaults: breakevens about 4.5% growth and 2.2% rate",
+    near(HD.breakeven.growth.value, 4.53, 0.01) && near(HD.breakeven.rate.value, 2.22, 0.01), J(HD.breakeven));
+  // Breakevens tie net worth at R.
+  const atG = CF.house({ houseOn: 1, apprec: HD.breakeven.growth.value });
+  const atI = CF.house({ houseOn: 1, mortRate: HD.breakeven.rate.value });
+  check("breakeven growth: net worth ties within a dollar", Math.abs(atG.atRet.buyNW - atG.atRet.rentNW) < 1, String(atG.atRet.buyNW - atG.atRet.rentNW));
+  check("breakeven rate: net worth ties within a dollar", Math.abs(atI.atRet.buyNW - atI.atRet.rentNW) < 1, String(atI.atRet.buyNW - atI.atRet.rentNW));
+  // No sign change: a cheap cash home against high rent is ahead at any growth and any rate;
+  // buying a year before retiring with nothing rented loses to renting at any growth up to 10%.
+  const AH = CF.house({ ...HB, price: 50000, downPct: 100, rent: 3000 });
+  check("breakeven: buying ahead even at -10%/yr and at any rate", AH.breakeven.growth.side === "buy" && AH.breakeven.growth.value === null &&
+    AH.breakeven.rate.side === "buy", J(AH.breakeven));
+  const BH = CF.house({ ...HB, buyAge: 49, rent: 0, closePct: 6, sellPct: 10 });
+  check("breakeven: renting stays ahead up to 10%/yr", BH.breakeven.growth.side === "rent" && BH.breakeven.growth.value === null, J(BH.breakeven));
+
+  // Switched off: every existing result is unchanged.
+  const strip = (p) => { const { inputs, ...rest } = p; return J(rest); };
+  for (const o of [{}, H0, { ...H0, coastOnA: 1, draw: 4000 }, { retAge: 55 }, { age: 60, retAge: 60 }]) {
+    const on = { ...o, houseOn: 1, buyAge: 30, price: 900000 };
+    check(`off or on, project() is the same (${J(o).slice(0, 30)})`, strip(CF.project(o)) === strip(CF.project(on)));
+    check(`off or on, the grid and the bridge are the same (${J(o).slice(0, 30)})`,
+      J(CF.grid(o)) === J(CF.grid(on)) && J(CF.bridge(o)) === J(CF.bridge(on)));
+  }
+  check("off by default: house() does nothing", CF.house({}).applies === false && CF.house({}).reason === "off" && CF.DEFAULTS.houseOn === 0);
+
+  // Edge cases (SPEC 11.6).
+  const NOW = CF.house({ ...HB, buyAge: 30 });
+  check("buy age at or before today: bought at the current age", NOW.b === 40 && NOW.warnings.includes("buyNow") && near(NOW.points[0].post, 76000));
+  check("buy age at or after retirement: not modeled", CF.house({ ...HB, buyAge: 50 }).reason === "buyAfterRet" && CF.house({ ...HB, buyAge: 60 }).applies === false);
+  check("bad ages: not modeled", CF.house({ ...HB, age: 50, retAge: 50 }).reason === "badAges");
+  check("price 0: not modeled", CF.house({ ...HB, price: 0 }).reason === "noPrice");
+  check("down payment below 3% clamps to 3% (no 100% loan)", CF.sanitize({ downPct: 0 }).values.downPct === 3 && CF.sanitize({ downPct: 1 }).values.downPct === 3);
+  check("term: 15 stays, anything else is 30", CF.sanitize({ term: 15 }).values.term === 15 && CF.sanitize({ term: 20 }).values.term === 30 &&
+    CF.sanitize({ term: "abc" }).values.term === 30);
+  const NEG = CF.house({ ...HB, nominal: 1, inflation: -1, mortRate: 4 });
+  check("negative inflation: real P&I rises, results finite", NEG.points[5].own > NEG.points[2].own && Number.isFinite(NEG.atRet.buyNW));
+  const LEFT = CF.house({ ...HB, term: 30 });
+  check("loan running past R: balance left and payments in the owner's FIRE number", LEFT.atRet.loanLeft > 0 && LEFT.fire.mortLeft > 0 &&
+    near(LEFT.atRet.loanLeft, 96000 - 96000 / 360 * 96, 1e-6));
+  // Cash short: buying today with 10,000 invested and 24,000 needed.
+  const SH = CF.house({ ...HB, buyAge: 40, assets: 10000 });
+  check("cash short at closing: 14,000 short, path floors at 0", near(SH.cashShort, 14000) && SH.points[0].post === 0 && SH.warnings.includes("cashShort"));
+  check("cash short: the 14,000 gap is a debt in buying net worth and the breakevens, not a gift",
+    near(SH.atRet.shortDebt, 14000, 1e-6) && near(SH.atRet.buyNW, SH.atRet.buyPortfolio + SH.atRet.homeNet - 14000, 1e-6), J(SH.atRet));
+  // Renting plan: 10,000 + 28,000 a year has 38,000 at 41, so 41 is the first age with 24,000 on hand.
+  check("cash short: the renting plan would have enough at 41", SH.afford === 41, String(SH.afford));
+  check("separate cash fund: the portfolio is untouched and the renter is credited the cash",
+    near(CF.house({ ...HB, downFrom: 0 }).atRet.buyPortfolio, 380000) && near(CF.house({ ...HB, downFrom: 0 }).atRet.rentNW, 380000 + 24000) &&
+    CF.house({ ...HB, downFrom: 0 }).cashShort === 0);
+  // FI before the purchase doesn't count if closing drops the portfolio below the owner's FIRE number:
+  // defaults, 400,000 invested, retire at 66, buy at 64. Renting reaches FI near 63; the balance just
+  // after closing at 64 is below FIRE_own(64), so buying is FI only after that, from the post-closing gap.
+  const LB = { houseOn: 1, assets: 400000, retAge: 66, buyAge: 64 }, LBh = CF.house(LB);
+  const LBt = CF.homeTerms(CF.sanitize(LB).values, CF.project(LB).r), LBp = LBh.points.find((p) => p.age === 64);
+  check("FI buying: must stay FI through the purchase (FI near 63 renting, after 64 buying)",
+    near(LBh.fi.rent.age, 63, 0.01) && LBp.post < LBt.fireOwn(64) && LBh.fi.buy.age > 64 && LBh.fi.buy.wholeAge >= 65 &&
+    UI.houseSummary(CF.project(LB), LBh) !== "Buy at 64: same FI age", J(LBh.fi));
+  // Already FI before the purchase and still FI after closing: the earlier age stands.
+  const LB2 = { ...LB, assets: 1000000 }, LB2h = CF.house(LB2);
+  // (Before the purchase both paths and both targets are the same, so the FI ages match.)
+  check("FI buying: an FI age before the purchase stands when closing keeps it", LB2h.fi.buy.age !== null && LB2h.fi.buy.age < 64 &&
+    near(LB2h.fi.buy.age, LB2h.fi.rent.age, 1e-9), J(LB2h.fi));
+  const HUGE = CF.house({ ...HB, price: 1e9, rent: 1e6, nominal: 30, inflation: -5 });
+  check("huge numbers: no NaN", HUGE.points.every((p) => !Number.isNaN(p.balance)) && !Number.isNaN(HUGE.atRet.buyNW));
+
+  // Hash: the sixteen new keys round-trip; an old link opens with the house off.
+  const HK = ["houseOn", "buyAge", "price", "downPct", "downFrom", "mortRate", "term", "pmi", "closePct", "sellPct", "propTax",
+    "insure", "maint", "apprec", "rent", "rentGrowth"];
+  check("hash: sixteen new keys, all with short names", HK.every((k) => CF.KEYS.includes(k) && CF.HASH_KEYS[k]) && CF.KEYS.length === 47);
+  const HV = { ...CF.DEFAULTS, houseOn: 1, buyAge: 50, price: 650000, downPct: 25, downFrom: 0, mortRate: 6.85, term: 15, pmi: 0.4,
+    closePct: 2.5, sellPct: 5.5, propTax: 1.25, insure: 2400, maint: 1.5, apprec: -0.5, rent: 2650, rentGrowth: 0.3 };
+  check("hash round-trips the house fields", J(CF.decodeHash("#" + CF.encodeHash(HV))) === J(HV));
+  check("an old link opens with the house off", CF.sanitize({ ...CF.DEFAULTS, ...CF.decodeHash("#a=42&r=65") }).values.houseOn === 0);
+
+  // Summary lines (ui.js).
+  const sum = (o) => { const p = CF.project(o); return UI.houseSummary(p, CF.house(o, p)); };
+  check("house row: off", sum({}) === "off");
+  check("house row: bad ages", sum({ houseOn: 1, age: 60, retAge: 60 }) === "fix the ages first");
+  check("house row: buy age after retirement", sum({ houseOn: 1, buyAge: 70 }) === "buy before 65 to compare");
+  check("house row: no price", sum({ houseOn: 1, price: 0 }) === "add a home price");
+  check("house row: cash short", sum({ ...HB, buyAge: 40, assets: 10000 }) === "Buy at 40: $14K short at closing", sum({ ...HB, buyAge: 40, assets: 10000 }));
+  check("house row (defaults): FI 13.6 yrs later", sum({ houseOn: 1 }) === "Buy at 45: FI 13.6 yrs later", sum({ houseOn: 1 }));
+  check("house row: FI earlier", sum({ ...AG, rent: 500 }).startsWith("Buy at 42: FI ") && sum({ ...AG, rent: 500 }).endsWith(" earlier"), sum({ ...AG, rent: 500 }));
+  check("house row: same FI age", sum({ ...AG, price: 100, rent: 0 }) === "Buy at 42: same FI age", sum({ ...AG, price: 100 }));
+  check("house row: net worth when an FI age isn't found", sum({ ...HB, spend: 1e6 }) === `Buy at 42: ${CF.fmtCompact(431200 - 380000, 2)} more at 50`, sum({ ...HB, spend: 1e6 }));
+  check("costs row", UI.houseCostsSummary(CF.DEFAULTS) === "closing 3% · selling 6% · tax 0.9% · insurance $1,600 · upkeep 1% · growth 0.5%", UI.houseCostsSummary(CF.DEFAULTS));
+  check("breakeven row (defaults)", UI.breakevenSummary(HD) === "ties at home prices +4.5%/yr or a 2.2% rate", UI.breakevenSummary(HD));
+  check("how row (defaults): payment and every year", UI.houseHowSummary(HD, 65) === `P&I ${CF.fmtMoney(HD.first.pi)}/mo · owning costs more every year`, UI.houseHowSummary(HD, 65));
+  check("how row: cash purchase, some years", UI.houseHowSummary({ ...HD, payment: 0, yearsCostMore: 3 }, 65) === "owning costs more 3 of 20 yrs");
+  check("breakeven row: ahead either way", UI.breakevenSummary(AH) === "buying ahead at any growth · buying ahead at any rate", UI.breakevenSummary(AH));
+}
+
 // ---------- privacy scan: no stray amounts, no spreadsheets ----------
 // Every concrete number must trace back to SPEC.md: cited defaults and their sources,
 // the 2026 limits, the test scenarios above, slider limits, and years.
@@ -496,6 +715,10 @@ const ALLOWED_NUMBERS = new Set([
   250000, 2000000, 300000, 907029, 22000, 99999, 1250000,
   // formatting examples
   634890, 634891, 1525000, 999999, 999400, 999600, 1127, 1128, 1500000, 1234567, 45200, 61000,
+  // the home (SPEC 11.9) and its test scenarios (SPEC 11.8)
+  418000, 417500, 1600, 1530, 1531, 1569, 4528, 1798, 2531, 120000, 96000, 24000, 356000, 51200, 44800, 431200, 78000,
+  190000, 80000, 5333, 53333, 16000, 76000, 12000, 41800, 12540, 54340, 3588, 2604, 376200, 297000, 297433, 594000,
+  594411, 1715273, 900000, 38000, 650000, 2400, 2650,
   // years (sources, the seed, the Trinity study)
   1998, 2022, 2023, 2024, 2025, 2026, 20261016,
   // the tests' random-number generator
@@ -508,6 +731,7 @@ const ALLOWED = new Set([
   "$1,000,000", "$57,822", "$57,822.29", "$22,784", "$42,452", "$1,775,000", "$1,009,932", "$10,000",
   "$500,000", "$1,000", "$1,234,567", "$1,500.50", "$61,000", "$40,000", "$20,000", "$100,000",
   "$1.78M", "$1.01M", "$1.5M", "$1M", "$635K", "$45K", "$999K", "$1.2T", "$2.5B", "$100K", "$1,128", "$500K", "$5K", "$10K",
+  "$418,000", "$417,500", "$1,530", "$1,531", "$1,600", "$1,569", "$14K",
   "$23K", "$42K", "$40K", "$5,000", "$50,000", "$6,000", "$2,000", "$28,000", "$634,891", "$71000",
 ]);
 let files;

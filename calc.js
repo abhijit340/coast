@@ -42,6 +42,10 @@
     salB: PARTNER.sal, kB: PARTNER.k, empB: PARTNER.emp, rothB: PARTNER.roth,
     coastOnB: PARTNER.coastOn, coastAgeB: PARTNER.coastAge, afterB: PARTNER.after,
     preShare: 90, sepShare: 50, sepRate: 5, basis: 0, taxable: 0, lead: 0,
+    // Buying a home (SPEC 11.9): off by default; US typical figures when switched on.
+    houseOn: 0, buyAge: 45, price: 418000, downPct: 10, downFrom: 1, mortRate: 7.4, term: 30,
+    pmi: 0.6, closePct: 3, sellPct: 6, propTax: 0.9, insure: 1600, maint: 1, apprec: 0.5,
+    rent: 1530, rentGrowth: 0,
   });
 
   // min/max: what a typed value is clamped to. sMin/sMax: the slider's range.
@@ -78,6 +82,22 @@
     basis:     { min: 0,   max: 1e10, sMin: 0,  sMax: 500000,  step: 1000, curve: true, money: true },
     taxable:   { min: 0,   max: 1e10, sMin: 0,  sMax: 500000,  step: 1000, curve: true, money: true },
     lead:      { min: 0,   max: 5,    sMin: 0,  sMax: 5,       step: 1,    int: true },
+    houseOn:   { bool: true },
+    buyAge:    { min: 0,   max: 120,  sMin: 18, sMax: 85,      step: 1,    int: true },
+    price:     { min: 0,   max: 1e9,  sMin: 50000, sMax: 1500000, step: 1000, curve: true, money: true },
+    downPct:   { min: 3,   max: 100,  sMin: 3,  sMax: 50,      step: 1 },   // no 100% loan
+    downFrom:  { bool: true },                                              // 1 = invested assets, 0 = separate cash
+    mortRate:  { min: 0,   max: 20,   sMin: 2,  sMax: 10,      step: 0.05 },
+    term:      { choice: [15, 30] },                                        // anything but 15 cleans to 30
+    pmi:       { min: 0,   max: 3,    sMin: 0,  sMax: 1.5,     step: 0.05 },
+    closePct:  { min: 0,   max: 10,   sMin: 0,  sMax: 6,       step: 0.1 },
+    sellPct:   { min: 0,   max: 15,   sMin: 0,  sMax: 10,      step: 0.1 },
+    propTax:   { min: 0,   max: 5,    sMin: 0,  sMax: 3,       step: 0.05 },
+    insure:    { min: 0,   max: 1e6,  sMin: 0,  sMax: 10000,   step: 50,   curve: true, money: true },
+    maint:     { min: 0,   max: 10,   sMin: 0,  sMax: 4,       step: 0.1 },
+    apprec:    { min: -10, max: 10,   sMin: -2, sMax: 3,       step: 0.1 },
+    rent:      { min: 0,   max: 1e6,  sMin: 0,  sMax: 5000,    step: 10,   curve: true, money: true },
+    rentGrowth:{ min: -10, max: 10,   sMin: -2, sMax: 3,       step: 0.1 },
   });
   const KEYS = Object.keys(DEFAULTS);
 
@@ -88,6 +108,9 @@
     salA: "sa", kA: "ka", empA: "ea", rothA: "ra", coastOnA: "ca", coastAgeA: "ga", afterA: "pa",
     salB: "sb", kB: "kb", empB: "eb", rothB: "rb", coastOnB: "cb", coastAgeB: "gb", afterB: "pb",
     preShare: "x", sepShare: "y", sepRate: "z", basis: "q", taxable: "c", lead: "l",
+    houseOn: "ho", buyAge: "hb", price: "hp", downPct: "hd", downFrom: "hf", mortRate: "hm", term: "ht",
+    pmi: "hq", closePct: "hc", sellPct: "hs", propTax: "hx", insure: "hi", maint: "hn", apprec: "hg",
+    rent: "hr", rentGrowth: "hw",
   });
 
   // ---------- building blocks ----------
@@ -128,6 +151,7 @@
     const fb = fallback === undefined ? DEFAULTS[key] : fallback;
     if (!Number.isFinite(n)) return { value: fb, ok: false };
     if (f.bool) return { value: n ? 1 : 0, ok: true };
+    if (f.choice) return { value: n === f.choice[0] ? f.choice[0] : f.choice[f.choice.length - 1], ok: true };
     let v = Math.min(f.max, Math.max(f.min, n));
     if (f.int) v = Math.round(v);
     return { value: v, ok: true };
@@ -524,6 +548,282 @@
     return sum;
   }
 
+  // ---------- buying a home: rent vs buy (SPEC 11) ----------
+  // Renting is the plan as entered (project(), untouched). Buying is the same plan with the
+  // purchase at age b and the yearly difference in housing cost flowing through saving.
+  // All real (today's dollars); the mortgage payment is fixed in dollars of the purchase year,
+  // so it shrinks by (1 + inflation) a year. Home equity is never part of the FIRE portfolio.
+
+  const PMI_END = 0.78; // Homeowners Protection Act: PMI ends at a scheduled 78% of the original value
+
+  /** Monthly payment on a fixed-rate loan: L·m / (1 − (1 + m)^−N); m = 0 → L / N; no loan → 0. */
+  function mortgagePayment(loan, annualRate, years) {
+    if (!(loan > 0) || !(years > 0)) return 0;
+    const m = annualRate / 12, N = 12 * years;
+    if (Math.abs(m) < 1e-12) return loan / N;
+    return loan * m / (1 - Math.pow(1 + m, -N));
+  }
+
+  /** Scheduled balance after t monthly payments (same dollars as the loan); 0 once paid off. */
+  function loanBalance(loan, annualRate, years, t) {
+    if (!(loan > 0) || t >= 12 * years) return 0;
+    if (t <= 0) return loan;
+    const m = annualRate / 12, pmt = mortgagePayment(loan, annualRate, years);
+    if (Math.abs(m) < 1e-12) return Math.max(0, loan - pmt * t);
+    const g = Math.pow(1 + m, t);
+    return Math.max(0, loan * g - pmt * (g - 1) / m);
+  }
+
+  /**
+   * Everything about the home that doesn't depend on the portfolio, as functions of age.
+   * `over` replaces inputs (the breakeven solvers vary apprec and mortRate).
+   */
+  function homeTerms(v, r, over) {
+    const o = over ? { ...v, ...over } : v;
+    const P = o.price, pi = o.inflation / 100, g = o.apprec / 100, rho = o.rentGrowth / 100;
+    const b = Math.max(o.buyAge, o.age), term = o.term, rate = o.mortRate / 100;
+    const D = P * o.downPct / 100, L = Math.max(0, P - D), K = P * o.closePct / 100;
+    const pmt = mortgagePayment(L, rate, term);
+    const pmiOn = o.downPct < 20 && L > 0;
+    const swr = Math.max(o.swr / 100, 0.001);
+    const defl = (j) => Math.pow(1 + pi, j);
+    const value = (a) => P * Math.pow(1 + g, a - b);
+    const sched = (j) => loanBalance(L, rate, term, 12 * j);       // purchase-year dollars
+    const loanAt = (a) => (a < b ? 0 : sched(a - b) / defl(a - b)); // today's dollars
+    const rentAt = (a) => 12 * o.rent * Math.pow(1 + rho, a - o.age);
+    // Months of year j with PMI: those starting above 78% of the price (pro-rated in the year it ends).
+    const thr = PMI_END * P + 1e-9;
+    function pmiMonths(j) {
+      if (!(sched(j) > thr)) return 0;
+      if (sched(j + 1) > thr) return 12;
+      let k = 1;
+      while (k < 12 && loanBalance(L, rate, term, 12 * j + k) > thr) k++;
+      return k;
+    }
+    function ownAt(a) {
+      const j = a - b, V = value(a);
+      const pAndI = j < term ? 12 * pmt / defl(j) : 0;
+      const tax = o.propTax / 100 * V, ins = o.insure, maint = o.maint / 100 * V;
+      const pmi = pmiOn ? o.pmi / 100 * L / defl(j) * pmiMonths(j) / 12 : 0;
+      return { pi: pAndI, tax, ins, maint, pmi, total: pAndI + tax + ins + maint + pmi };
+    }
+    const delta = (a) => (a < b ? 0 : ownAt(a).total - rentAt(a)); // + = owning costs more
+    // Mortgage payments still to come at age a, as a lump in today's dollars (discounted at r).
+    function mortLeft(a) {
+      let s = 0;
+      for (let j = Math.max(0, a - b); j < term; j++) s += 12 * pmt / defl(j) / Math.pow(1 + r, j - (a - b) + 1);
+      return s;
+    }
+    // FIRE numbers at age a. Retirement spending includes today's rent (SPEC 11.3).
+    const fireRent = (a) => Math.max(0, o.spend + rentAt(a) - 12 * o.rent) / swr;
+    const fireOwn = (a) => {
+      if (a < b) return fireRent(a);
+      const V = value(a);
+      const carry = o.propTax / 100 * V + o.insure + o.maint / 100 * V;
+      return Math.max(0, o.spend - 12 * o.rent + carry) / swr + mortLeft(a);
+    };
+    return {
+      P, D, L, K, cash: D + K, b, term, pmt, pmiOn, fromInvested: !!o.downFrom, sellPct: o.sellPct / 100,
+      value, loanAt, rentAt, ownAt, delta, mortLeft, fireRent, fireOwn, sched, pmiMonths,
+    };
+  }
+
+  /**
+   * The buying path: the same plan with the purchase at b and housing deltas added to (or
+   * taken from) saving. Contributions floor at 0 (the rest is a deficit, assumed paid from pay).
+   * `full`: never coast and no draw (the FI-age search), running to `end`.
+   * Each point's `balance` is at the start of that age; at b, `post` is the balance just after
+   * the cash at closing leaves (when it comes from invested assets).
+   */
+  function buyPath(v, plan, r, T, end, full) {
+    const first = full ? Infinity : firstCoastAge(plan);
+    const pts = [];
+    let B = v.assets, short = 0;
+    for (let a = v.age; a <= end; a++) {
+      const p = { age: a, balance: B };
+      if (a === T.b && T.fromInvested) {
+        short = Math.max(0, T.cash - B);
+        B = Math.max(0, B - T.cash);
+        p.post = B;
+      }
+      if (a < end) {
+        const C = contribAt(v, plan, a).total, d = T.delta(a);
+        p.contrib = Math.max(0, C - d);
+        p.deficit = Math.max(0, d - C);
+        p.draw = !full && a < v.retAge && a >= first ? v.draw : 0;
+        B = Math.max(0, B * (1 + r) + p.contrib - p.draw);
+      }
+      pts.push(p);
+    }
+    return { points: pts, short };
+  }
+
+  /**
+   * First age a path's balance meets a target that can change with age, interpolating the gap
+   * linearly between the two year-ends around the crossing (as neverCoastAge does). At the
+   * purchase age the balance after closing counts.
+   */
+  function firstReach(points, target) {
+    let prev = null;
+    for (const p of points) {
+      const t = target(p.age), gap = (p.post !== undefined ? p.post : p.balance) - t;
+      if (gap >= -1e-9 * Math.max(1, Math.abs(t))) {
+        const age = prev === null || gap <= prev ? p.age : p.age - 1 + Math.min(1, Math.max(0, -prev / (gap - prev)));
+        return { age, wholeAge: p.age };
+      }
+      prev = gap;
+    }
+    return { age: null, wholeAge: null };
+  }
+
+  /** Net worth at R on each side, everything else as entered. */
+  function netWorths(v, res, T) {
+    const R = v.retAge;
+    const run = buyPath(v, planOf(v), res.r, T, R);
+    const port = run.points[run.points.length - 1].balance;
+    const value = T.value(R), loanLeft = T.loanAt(R);
+    // Down payment from a separate cash fund: the renter keeps that cash invested (net worth only).
+    const credited = T.fromInvested ? 0 : T.cash * Math.pow(1 + res.r, R - T.b);
+    // Cash short at closing: the home was bought with money the portfolio didn't have, so the
+    // gap is carried as a debt growing at r to R (SPEC 11.2), not counted as a gift.
+    const shortDebt = run.short > 0.5 ? run.short * Math.pow(1 + res.r, R - T.b) : 0;
+    return {
+      run, buyPortfolio: port, value, loanLeft, homeNet: value * (1 - T.sellPct) - loanLeft, shortDebt,
+      buy: port + value * (1 - T.sellPct) - loanLeft - shortDebt, rent: res.balanceAtRet + credited, credited,
+    };
+  }
+
+  /** Bisection for where f (net worth buying − renting at R) crosses 0 on [lo, hi]. */
+  function tie(f, lo, hi) {
+    const flo = f(lo), fhi = f(hi);
+    if (!Number.isFinite(flo) || !Number.isFinite(fhi)) return { value: null, side: null };
+    if ((flo >= 0) === (fhi >= 0)) return { value: null, side: flo >= 0 ? "buy" : "rent" };
+    let a = lo, b = hi, fa = flo;
+    for (let i = 0; i < 80; i++) {
+      const m = (a + b) / 2, fm = f(m);
+      if ((fm >= 0) === (fa >= 0)) { a = m; fa = fm; } else b = m;
+    }
+    return { value: (a + b) / 2, side: null };
+  }
+
+  /**
+   * Rent vs buy (SPEC 11). {applies: false, reason} when off or not modeled ("off", "badAges",
+   * "buyAfterRet", "noPrice"); otherwise the comparison. Never changes project()'s result.
+   */
+  function house(inputs, res) {
+    const v = sanitize(inputs).values;
+    res = res || project(v);
+    if (!v.houseOn) return { applies: false, reason: "off", warnings: [] };
+    if (v.retAge <= v.age) return { applies: false, reason: "badAges", warnings: [] };
+    if (v.buyAge >= v.retAge) return { applies: false, reason: "buyAfterRet", warnings: ["buyAfterRet"] };
+    if (!(v.price > 0)) return { applies: false, reason: "noPrice", warnings: ["noPrice"] };
+    const r = res.r, R = v.retAge, T = homeTerms(v, r), b = T.b;
+    const near0 = (x) => 1e-9 * Math.max(1, Math.abs(x));
+
+    // The plan as entered, buying; and net worth at R on both sides.
+    const nw = netWorths(v, res, T);
+    const short = nw.run.short;
+    const points = nw.run.points.map((p) => {
+      const a = p.age, owns = a >= b;
+      return {
+        ...p, rent: T.rentAt(a), own: owns ? T.ownAt(a).total : null, delta: T.delta(a),
+        value: owns ? T.value(a) : 0, loan: T.loanAt(a),
+        equity: owns ? T.value(a) - T.loanAt(a) : 0,
+        equityNet: owns ? T.value(a) * (1 - T.sellPct) - T.loanAt(a) : 0,
+      };
+    });
+
+    const fireRent = T.fireRent(R), fireOwn = T.fireOwn(R);
+
+    // FI age: never coast, full saving, working past R if needed; each against its own FIRE number.
+    const top = Math.max(v.age, v.retAge, NEVER_COAST_MAX_AGE);
+    const fiRent = firstReach(res.neverCoast.points, T.fireRent);
+    // Buying: the first age the household is FI and stays FI through the purchase. A renter's FI
+    // before b doesn't count if closing then drops the portfolio below FIRE_own, so the search
+    // restarts at the last point up to b (the balance after closing at b) that is below target.
+    const fullBuy = buyPath(v, fullPlanOf(v), r, T, top, true).points;
+    let restart = 0;
+    fullBuy.forEach((p, i) => {
+      const t = T.fireOwn(p.age), bal = p.post !== undefined ? p.post : p.balance;
+      if (p.age <= b && bal - t < -1e-9 * Math.max(1, Math.abs(t))) restart = i;
+    });
+    const fiBuy = firstReach(fullBuy.slice(restart), T.fireOwn);
+
+    // Meets the coast line. Buying: the balance at k that, with no base saving from k (housing
+    // deltas and the purchase only, no draw), grows into FIRE_own by R. It is affine in the
+    // starting balance, so one zero-start run per age gives it (no floor at 0).
+    function zeroStart(k) {
+      let B = 0;
+      for (let a = k; a < R; a++) {
+        if (a === b && T.fromInvested) B -= T.cash;
+        B = B * (1 + r) + Math.max(0, -T.delta(a));
+      }
+      return B;
+    }
+    const coastBuy = (k) => (fireOwn - zeroStart(k)) / Math.pow(1 + r, R - k);
+    const coastRent = (k) => fireRent / Math.pow(1 + r, R - k);
+    let crossBuy = null, crossRent = null;
+    for (const p of points) {
+      const cb = coastBuy(p.age), cr = coastRent(p.age);
+      if (crossBuy === null && p.balance >= cb - near0(cb)) crossBuy = p.age;
+      if (crossRent === null && res.points[p.age - v.age].balance >= cr - near0(cr)) crossRent = p.age;
+    }
+
+    // Earliest age both could coast, each side against its own FIRE number.
+    function earliestBuy() {
+      const tol = 1e-6 * Math.max(1, fireOwn);
+      const make = (c) => { const o = {}; for (const p of partners(v)) o[p] = { on: true, age: c }; return planOf(v, o); };
+      const end = (c) => { const pts = buyPath(v, make(c), r, T, R).points; return pts[pts.length - 1].balance; };
+      for (let c = v.age; c <= R; c++) if (end(c) >= fireOwn - tol) return { age: c, years: R - c };
+      return { age: null, years: 0, best: end(R) };
+    }
+    const earliest = { rent: earliestCoast(v, "both", fireRent, r), buy: earliestBuy() };
+
+    // Breakevens: the home growth and the mortgage rate at which net worth at R ties.
+    const nwDiff = (over) => { const n = netWorths(v, res, homeTerms(v, r, over)); return n.buy - n.rent; };
+    const growth = tie((g) => nwDiff({ apprec: g }), -10, 10);
+    const rateTie = tie((i) => -nwDiff({ mortRate: i }), 0, 20); // negated: buying gets worse as the rate rises
+    const rate = { value: rateTie.value, side: rateTie.side === null ? null : rateTie.side === "buy" ? "rent" : "buy" };
+
+    // Cash flow while owning, before R.
+    let yearsCostMore = 0, yearsShort = 0, totalDeficit = 0;
+    for (const p of points) {
+      if (p.age < b || p.age >= R) continue;
+      if (p.delta > 0.005) yearsCostMore++;
+      if (p.deficit > 0.5) { yearsShort++; totalDeficit += p.deficit; }
+    }
+    // Cash short at closing: the first whole age from b at which the renting plan holds enough.
+    let afford = null;
+    if (short > 0.5) for (let a = b; a < R; a++) if (res.points[a - v.age].balance >= T.cash) { afford = a; break; }
+    // The first year PMI is no longer charged (null when there is none).
+    let pmiEnds = null;
+    if (T.pmiOn && v.pmi > 0) for (let j = 0; j <= T.term; j++) if (T.sched(j) <= PMI_END * T.P + 1e-9) { pmiEnds = b + j; break; }
+
+    const first = T.ownAt(b), rentFirst = T.rentAt(b);
+    const warnings = [];
+    if (v.buyAge <= v.age) warnings.push("buyNow");
+    if (short > 0.5) warnings.push("cashShort");
+    if (yearsShort) warnings.push("deficit");
+    if (![fireOwn, nw.buy, nw.rent].every(Number.isFinite)) warnings.push("tooLarge");
+    return {
+      applies: true, b, price: T.P, down: T.D, loan: T.L, closing: T.K, cash: T.cash, fromInvested: T.fromInvested,
+      payment: T.pmt, // monthly P&I, in dollars of the purchase year (= today's dollars then)
+      first: {
+        pi: first.pi / 12, tax: first.tax / 12, ins: first.ins / 12, maint: first.maint / 12, pmi: first.pmi / 12,
+        total: first.total / 12, rent: rentFirst / 12, diff: (first.total - rentFirst) / 12,
+      },
+      pmiEnds,
+      fire: { rent: fireRent, own: fireOwn, mortLeft: T.mortLeft(R) },
+      fi: { rent: fiRent, buy: fiBuy }, cross: { rent: crossRent, buy: crossBuy }, earliest,
+      atRet: {
+        rentPortfolio: res.balanceAtRet, buyPortfolio: nw.buyPortfolio, rentNW: nw.rent, buyNW: nw.buy,
+        value: nw.value, loanLeft: nw.loanLeft, homeNet: nw.homeNet, credited: nw.credited, shortDebt: nw.shortDebt,
+      },
+      breakeven: { growth, rate },
+      yearsCostMore, yearsShort, totalDeficit, cashShort: short > 0.5 ? short : 0, afford, points, warnings,
+    };
+  }
+
   // ---------- sliders ----------
 
   const SLIDER_STEPS = 1000;
@@ -620,6 +920,7 @@
     realReturn, fireNumber, coastNumber, annuityFactor, hsaLimit, parseNumber, cleanField, sanitize,
     partnerBase, planOf, fullPlanOf, contribAt, path, balanceAtRet, earliestCoast, neverCoastAge, project, grid,
     lifeExpectancy, sepPayment, sepLockEnd, bridge, rothBasisEstimate,
+    PMI_END, mortgagePayment, loanBalance, homeTerms, buyPath, firstReach, house,
     fmtMoney, fmtCompact, encodeHash, decodeHash, sliderToValue, valueToSlider, niceRound,
   };
   root.CoastFire = api;

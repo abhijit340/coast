@@ -26,7 +26,7 @@ const reduceMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-mot
 const coarse = window.matchMedia ? window.matchMedia("(pointer: coarse)") : { matches: false };
 
 let values = { ...CF.DEFAULTS };
-let result = null, gridRes = null, bridgeRes = null;
+let result = null, gridRes = null, bridgeRes = null, houseRes = null;
 let hover = null;            // index into result.points the crosshair sits on, or null
 let viewingShared = false;   // showing a shared link's numbers; not saved until edited or kept
 const notes = {};            // per field: { err, adj }
@@ -68,11 +68,25 @@ const META = {
   basis: { label: "Roth contributions (basis)", pre: true },
   taxable: { label: "Taxable + cash", pre: true, hint: "Brokerage and savings you can spend at any age." },
   lead: { label: "Start conversions early", unit: "yrs before", mode: "numeric", hint: "Converting while still working lets the first rungs ripen sooner (taxed at your working-years rate)." },
+  // Buying a home (SPEC 11)
+  buyAge: { label: "Buy at age", unit: "yrs", mode: "numeric" },
+  price: { label: "Home price", pre: true, hint: "What the home would cost if you bought it today; appreciation starts when you buy." },
+  downPct: { label: "Down payment", unit: "% of price", hint: "At least 3%. Under 20% adds PMI until the loan is scheduled to reach 78% of the price." },
+  mortRate: { label: "Mortgage rate", unit: "%/yr", hint: "Fixed for the whole loan, before inflation. Freddie Mac's 30-year average was 7.40% in mid-October 2026." },
+  rent: { label: "Rent today", pre: true, unit: "/mo", hint: "The rent for a home like the one you'd buy. Your retirement spending above already includes today's rent." },
+  pmi: { label: "Mortgage insurance (PMI)", unit: "%/yr", hint: "Mortgage insurance, as a share of the loan, only while the down payment is under 20%. Ends when the loan is scheduled to reach 78% of the price (you can ask at 80%)." },
+  closePct: { label: "Closing costs", unit: "% of price", hint: "Paid when you buy: lender fees, title, recording and transfer taxes, prepaid items. Often 2–5% of the loan." },
+  sellPct: { label: "Selling costs", unit: "% of value", hint: "Agents and closing costs if you sold at retirement. Used only for net worth; the home never counts toward your FIRE number." },
+  propTax: { label: "Property tax", unit: "%/yr", hint: "Each year, as a share of the home's value. The US effective rate was about 0.9% in 2025." },
+  insure: { label: "Home insurance", pre: true, unit: "/yr", hint: "Per year, in today's dollars. The default is the 2022 national average; premiums have risen since." },
+  maint: { label: "Maintenance", unit: "%/yr", hint: "Each year, as a share of the home's value. Real repairs come in lumps, not 1% a year." },
+  apprec: { label: "Home price growth above inflation", unit: "%/yr", mode: "text", hint: "How fast the home's value grows after you buy, after inflation." },
+  rentGrowth: { label: "Rent growth above inflation", unit: "%/yr", mode: "text", hint: "How fast that rent grows after inflation. 0% means it keeps pace with prices." },
 };
 const metaOf = (key) => META[key] || META[key.slice(0, -1)];
 const partnerOf = (key) => (/[AB]$/.test(key) && !META[key] ? key.slice(-1) : null);
 const LIMIT_TEXT = { k401: "$24,500 limit", roth: "$7,500 limit" };
-const NUM_KEYS = CF.KEYS.filter((k) => !CF.FIELDS[k].bool);
+const NUM_KEYS = CF.KEYS.filter((k) => !CF.FIELDS[k].bool && !CF.FIELDS[k].choice);
 // Hints that stay on screen: ones holding a button, and the coast-age out-of-range warning.
 // The rest show while the number box has focus, or after a tap on the field's (i).
 const KEEP_HINT = new Set(["sepShare", "basis", "coastAgeA", "coastAgeB"]);
@@ -127,7 +141,11 @@ function buildInputs() {
       <div id="br-fields">${["preShare", "sepShare", "sepRate", "basis", "taxable", "lead"].map(fieldHTML).join("")}</div>
       <div id="br-out"></div>
     </div>`;
-  for (const id of ["hh-fields", "assume-fields", "draw-fields", "hsa-fields", "br-fields"]) $(id).querySelector(".field").classList.add("first");
+  $("house-fields").innerHTML = ["buyAge", "price", "downPct"].map(fieldHTML).join("");
+  $("house-rate-fields").innerHTML = fieldHTML("mortRate");
+  $("house-rent-fields").innerHTML = fieldHTML("rent");
+  $("house-cost-fields").innerHTML = ["closePct", "sellPct", "propTax", "insure", "maint", "pmi", "apprec", "rentGrowth"].map(fieldHTML).join("");
+  for (const id of ["hh-fields", "assume-fields", "draw-fields", "hsa-fields", "br-fields", "house-fields", "house-cost-fields"]) $(id).querySelector(".field").classList.add("first");
 }
 
 // ---------- loading and saving ----------
@@ -225,7 +243,7 @@ function withUnit(key, v) {
 function unitWords(key) {
   const f = CF.FIELDS[key], m = metaOf(key);
   if (f.int) return m.unit === "yrs" ? " years" : " years";
-  if (f.money) return m.unit === "/yr" ? " dollars a year" : " dollars";
+  if (f.money) return m.unit === "/yr" ? " dollars a year" : m.unit === "/mo" ? " dollars a month" : " dollars";
   return " percent";
 }
 const sliderTop = (key) => (key === "hsa" ? CF.hsaLimit(values) : undefined);
@@ -257,7 +275,11 @@ function showNote(key) {
   const field = box.closest(".field");
   const ageMsg = key === "retAge" && values.retAge <= values.age ? `Must be after your current age (${values.age})` : "";
   const bad = !!n.err || !!ageMsg;
-  $("n-" + key).textContent = n.err || ageMsg || n.adj;
+  // A note, not an error: buying after retirement isn't compared (nothing to project).
+  const soft = key === "buyAge" && values.houseOn && values.buyAge >= values.retAge && values.retAge > values.age ? `Buy before ${values.retAge} to compare`
+    : key === "pmi" && values.downPct >= 20 ? "Not needed at 20% down" : "";
+  if (key === "pmi") field.classList.toggle("na", values.downPct >= 20);
+  $("n-" + key).textContent = n.err || ageMsg || n.adj || soft;
   field.classList.toggle("invalid", bad);
   if (bad) box.setAttribute("aria-invalid", "true"); else box.removeAttribute("aria-invalid");
   // An error inside a closed section opens it (and every section around it).
@@ -349,6 +371,12 @@ function wireSwitches() {
   const seg = (fam) => { values.hsaFamily = fam ? 1 : 0; clampHsa(); userChanged(); };
   $("seg-family").addEventListener("click", () => seg(true));
   $("seg-self").addEventListener("click", () => seg(false));
+  // Buying a home: the switch, where the down payment comes from, and the term.
+  $("sw-house").addEventListener("click", () => { values.houseOn = values.houseOn ? 0 : 1; userChanged(); });
+  $("seg-down-inv").addEventListener("click", () => { values.downFrom = 1; userChanged(); });
+  $("seg-down-cash").addEventListener("click", () => { values.downFrom = 0; userChanged(); });
+  $("seg-term-15").addEventListener("click", () => { values.term = 15; userChanged(); });
+  $("seg-term-30").addEventListener("click", () => { values.term = 30; userChanged(); });
 }
 
 // ---------- results: words ----------
@@ -620,6 +648,10 @@ function drawChart() {
   let yMax = res.fire;
   for (const p of pts) yMax = Math.max(yMax, p.balance, p.coastLine, p.noContrib);
   for (const p of ncPts) yMax = Math.max(yMax, p.balance);
+  // Buying a home (when on): the buying portfolio from the purchase age to R, and its FIRE number.
+  const hb = buyShown(res);
+  const buyPts = hb ? hb.points : null, bi = hb ? hb.b - v.age : 0;
+  if (hb) { for (const p of buyPts) yMax = Math.max(yMax, p.balance); yMax = Math.max(yMax, hb.fire.own); }
   if (!(yMax > 0)) yMax = 1;
   const yStep = niceStep(yMax * 1.1 / 4);
   const yTop = Math.ceil(yMax * 1.1 / yStep) * yStep;
@@ -669,6 +701,13 @@ function drawChart() {
   ncFrom = ncFrom < 0 ? ncPts.length : Math.max(0, ncFrom - 1);
   const keepPts = ncPts.slice(ncFrom);
   if (keepPts.length > 1) s += `<path class="l-keep" d="${keepPts.map((p, i) => `${i ? "L" : "M"}${x(p.age).toFixed(1)} ${y(p.balance).toFixed(1)}`).join("")}"/>`;
+  if (hb) {
+    // From the purchase: the drop at b as a vertical step, then the buying portfolio to R.
+    let d = `M${x(hb.b).toFixed(1)} ${y(buyPts[bi].balance).toFixed(1)}`;
+    if (buyPts[bi].post !== undefined) d += `V${y(buyPts[bi].post).toFixed(1)}`;
+    for (let k = bi + 1; k <= n; k++) d += `L${x(buyPts[k].age).toFixed(1)} ${y(buyPts[k].balance).toFixed(1)}`;
+    s += `<path class="l-buy" d="${d}"/>`;
+  }
   s += `<path class="l-proj" d="${line("balance")}"/>`;
   // FIRE number reference line, labelled directly.
   const fy = y(res.fire);
@@ -677,12 +716,15 @@ function drawChart() {
   // no label placed before it (and, for the inline line labels, no line).
   const placed = [];
   const plotW = W - L - Rm;
-  const lineKeys = ["balance", "coastLine", "noContrib", "keep"];
+  const lineKeys = ["balance", "coastLine", "noContrib", "keep"].concat(hb ? ["buy"] : []);
   const lineY = (key, px) => {
-    const vals = key === "keep" ? ncPts.map((p) => p.balance) : pts.map((p) => p[key]);
+    if (key === "buy" && !buyPts) return -1e9; // the buying line is off
+    const vals = key === "keep" ? ncPts.map((p) => p.balance)
+      : key === "buy" ? buyPts.map((p) => (p.post !== undefined ? p.post : p.balance)) : pts.map((p) => p[key]);
     const last = vals.length - 1, a = Math.max(0, (px - L) / plotW * span);
     if (a > last + 1e-9) return -1e9; // that line has ended
     if (key === "keep" && a < ncFrom) return -1e9; // not drawn there
+    if (key === "buy" && a < bi) return -1e9;
     if (last < 1) return y(vals[0]);
     const i = Math.min(last - 1, Math.floor(a)), f = a - i;
     return y(vals[i] * (1 - f) + vals[i + 1] * f);
@@ -729,7 +771,8 @@ function drawChart() {
   const endCands = [endY, endY - 13, ey + 15, endY + 13, ey - 21].filter((yy, i, a) => a.indexOf(yy) === i && yy <= H - B - 3)
     .map((yy) => ({ box: boxOf(ex - 6, yy, endText, 11, "end"),
       svg: `<text class="end-label halo" x="${(ex - 6).toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="end">${endText}</text>` }));
-  const endPick = endCands.find((k) => fits(k.box, ["keep", "balance"])) || endCands.find((k) => fits(k.box, ["keep"])) || endCands[0];
+  const endPick = endCands.find((k) => fits(k.box, ["keep", "balance", "buy"])) || endCands.find((k) => fits(k.box, ["keep", "balance"])) ||
+    endCands.find((k) => fits(k.box, ["keep"])) || endCands[0];
   placed.push(endPick.box);
   endSvg += endPick.svg;
   // Where saving at full pace (never coasting) first reaches the FIRE number.
@@ -749,6 +792,41 @@ function drawChart() {
     // Clear of the projection and the never-coast line if possible; else the first spot.
     if (!place(c, lineKeys) && !place(c, ["balance", "keep"])) { c[0].must = true; place(c); }
   }
+  // Buying: a square at the post-purchase point, "buy at b", and the buyer's FIRE number as a tick
+  // at the end of the buy line (x = R). Either label is dropped, never forced over other marks:
+  // the legend entry then carries it.
+  let buyFireInKey = false;
+  if (hb) {
+    const q = buyPts[bi], qx = x(hb.b), qy = y(q.post !== undefined ? q.post : q.balance);
+    s += `<rect class="buy-mark" x="${(qx - 3.5).toFixed(1)}" y="${(qy - 3.5).toFixed(1)}" width="7" height="7"/>`;
+    placed.push({ x0: qx - 4, x1: qx + 4, y0: qy - 4, y1: qy + 4 });
+    const text = `buy at ${hb.b}`, c = [];
+    // Next to the square first; then higher up, clear of the lines bunched near $0, with a leader.
+    for (const yy of [qy - 7, qy + 15]) for (const right of [true, false]) {
+      const tx = right ? qx + 7 : qx - 7, anchor = right ? "start" : "end";
+      c.push({ box: boxOf(tx, yy, text, 11, anchor), svg: `<text class="ann buy-t halo" x="${tx.toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="${anchor}">${text}</text>` });
+    }
+    for (const up of [24, 38, 52, 66]) for (const right of [true, false]) {
+      const yy = qy - up, tx = right ? qx + 3 : qx - 3, anchor = right ? "start" : "end";
+      c.push({ box: boxOf(tx, yy, text, 11, anchor),
+        svg: `<line class="buy-leader" x1="${qx.toFixed(1)}" x2="${qx.toFixed(1)}" y1="${(qy - 5).toFixed(1)}" y2="${(yy + 3).toFixed(1)}"/>` +
+          `<text class="ann buy-t halo" x="${tx.toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="${anchor}">${text}</text>` });
+    }
+    place(c, lineKeys) || place(c, ["buy", "balance"]);
+    const foy = y(hb.fire.own), rx = x(v.retAge);
+    if (Math.abs(foy - fy) > 8) {
+      s += `<line class="fire-own" x1="${(rx - 7).toFixed(1)}" x2="${(rx + 7).toFixed(1)}" y1="${foy.toFixed(1)}" y2="${foy.toFixed(1)}"/>`;
+      placed.push({ x0: rx - 7, x1: rx + 7, y0: foy - 1, y1: foy + 1 });
+      const ft = `FIRE if you buy ${cmp(hb.fire.own)}`, fc = [];
+      // Just inside the retirement line, then left by the axis (like "FIRE number"), then right of the tick.
+      for (const [tx, anchor] of [[rx - 10, "end"], [L + 4, "start"], [rx + 10, "start"]]) for (const yy of [foy - 4, foy + 12]) {
+        fc.push({ box: boxOf(tx, yy, ft, 10, anchor),
+          svg: `<text class="ref-label buy-t halo" x="${tx.toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="${anchor}">${ft}</text>` });
+      }
+      buyFireInKey = !place(fc, lineKeys);
+    }
+  }
+  if ($("buy-key")) $("buy-key").textContent = hb ? `Buy a home at ${hb.b} (portfolio, not the house)${buyFireInKey ? ` · FIRE if you buy ${cmp(hb.fire.own)}` : ""}` : "Buy a home (portfolio, not the house)";
   // Partner coast points: a pin on the baseline and a label, on alternating sides.
   const pins = [];
   for (const p of v.two ? ["A", "B"] : ["A"]) {
@@ -836,9 +914,9 @@ function drawChart() {
     svg: `<text class="ref-label coast-label halo" x="${L + 4}" y="${yy.toFixed(1)}">coast line</text>` })), lineKeys);
   s += `<g id="hover"></g>`;
   svg.innerHTML = s;
-  geo = { x, y, W, H, T, B, L, Rm, span, last: xEnd - v.age, ncPts };
+  geo = { x, y, W, H, T, B, L, Rm, span, last: xEnd - v.age, ncPts, buyPts, bi };
   $("keep-key").textContent = keepKeyText(res);
-  svg.setAttribute("aria-label", `Chart from age ${v.age} to ${xEnd}, in today's dollars at a ${(res.r * 100).toFixed(2)}% real return (${v.nominal.toFixed(1)}% return, ${v.inflation.toFixed(1)}% inflation). Your plan reaches ${cmp(res.balanceAtRet)} at ${v.retAge} against a FIRE number of ${cmp(res.fire)}. ${neverCoastWords(res)} ${$("headline").textContent} Use the left and right arrow keys to step through ages, Home and End to jump, Escape to clear.`);
+  svg.setAttribute("aria-label", `Chart from age ${v.age} to ${xEnd}, in today's dollars at a ${(res.r * 100).toFixed(2)}% real return (${v.nominal.toFixed(1)}% return, ${v.inflation.toFixed(1)}% inflation). Your plan reaches ${cmp(res.balanceAtRet)} at ${v.retAge} against a FIRE number of ${cmp(res.fire)}. ${neverCoastWords(res)}${hb ? ` Buying a home at ${hb.b}, the portfolio (the home not included) reaches ${cmp(hb.atRet.buyPortfolio)} at ${v.retAge}, against a FIRE number of ${cmp(hb.fire.own)} if you buy.` : ""} ${$("headline").textContent} Use the left and right arrow keys to step through ages, Home and End to jump, Escape to clear.`);
   showHover(hover === null ? null : Math.min(hover, geo.last));
 }
 
@@ -848,6 +926,12 @@ function chartEnd(res) {
   const v = res.inputs, nc = res.neverCoast;
   if (nc.wholeAge === null || nc.wholeAge <= v.retAge) return v.retAge;
   return Math.max(v.retAge, Math.min(nc.top, nc.wholeAge + 2));
+}
+
+// The buying line is drawn only when the comparison is on and modeled.
+function buyShown(res) {
+  const h = houseRes;
+  return h && h.applies && !h.warnings.includes("tooLarge") && !res.warnings.includes("retAgeNotAfterAge") ? h : null;
 }
 
 const planCoastsBy = (res) => Number.isFinite(res.firstCoast) && res.firstCoast < res.inputs.retAge;
@@ -865,7 +949,7 @@ function neverCoastWords(res) {
 
 // At rest (nobody dragging or stepping) the row is quiet: the age and the two values, no gap,
 // since the chip and the chart's own labels already say how far off the plan is.
-function readoutHTML(age, p, k, rest) {
+function readoutHTML(age, p, k, rest, q) {
   let s = `<b>Age ${age}</b>`;
   if (p) {
     const diff = p.balance - p.coastLine;
@@ -874,6 +958,9 @@ function readoutHTML(age, p, k, rest) {
     // The gap is the plan's distance to the coast line: keep it next to those two, before "Keep saving".
     if (!rest) s += `<span class="gap ${diff >= 0 ? "up" : "down"}">plan ${cmp(Math.abs(diff))} ${diff >= 0 ? "above" : "below"} coast line</span>`;
     if (k && Math.abs(k.balance - p.balance) > 0.5) s += `<span><i class="key k-keep"></i>Keep saving ${cmp(k.balance)}</span>`;
+    // The buying portfolio, where it differs from the plan (at rest too: its value at R).
+    const qb = q ? (q.post !== undefined ? q.post : q.balance) : null;
+    if (q && Math.abs(qb - p.balance) > 0.5) s += `<span><i class="key k-buy"></i>Buying ${cmp(qb)}</span>`;
   } else if (k) {
     const d = k.balance - result.fire, ok = d >= -0.5;
     s += `<span><i class="key k-keep"></i>Keep saving ${cmp(k.balance)}</span><span class="past">still working past ${result.inputs.retAge}</span>` +
@@ -887,8 +974,8 @@ function showHover(i) {
   hover = i;
   const pts = result.points, n = pts.length - 1;
   const idx = i === null ? n : i, age = result.inputs.age + idx;
-  const p = pts[idx], k = geo.ncPts[idx];
-  $("readout").innerHTML = readoutHTML(age, p, k, i === null);
+  const p = pts[idx], k = geo.ncPts[idx], q = geo.buyPts && idx >= geo.bi ? geo.buyPts[idx] : null;
+  $("readout").innerHTML = readoutHTML(age, p, k, i === null, q);
   $("readout").classList.toggle("rest", i === null);
   const g = $("hover");
   if (!g) return;
@@ -896,6 +983,7 @@ function showHover(i) {
   const px = geo.x(age);
   let dots = "";
   if (k && (!p || Math.abs(k.balance - p.balance) > 0.5)) dots += `<circle class="dot-keep" cx="${px}" cy="${geo.y(k.balance)}" r="4"/>`;
+  if (q && p) { const qb = q.post !== undefined ? q.post : q.balance; if (Math.abs(qb - p.balance) > 0.5) dots += `<circle class="dot-buy" cx="${px}" cy="${geo.y(qb)}" r="4"/>`; }
   if (p) dots += `<circle class="dot-coast" cx="${px}" cy="${geo.y(p.coastLine)}" r="4"/><circle class="dot-proj" cx="${px}" cy="${geo.y(p.balance)}" r="4"/>`;
   g.innerHTML = `<line class="xhair" x1="${px}" x2="${px}" y1="${geo.T}" y2="${geo.H - geo.B}"/>` + dots;
 }
@@ -975,7 +1063,7 @@ function setLegendOpen(open, save) {
 
 function renderPathTable(res) {
   if ($("path-table").hidden) return;
-  const v = res.inputs, end = chartEnd(res), nc = res.neverCoast;
+  const v = res.inputs, end = chartEnd(res), nc = res.neverCoast, hb = buyShown(res);
   // Phones: compact amounts so all six columns fit without a sideways scroll.
   const narrow = window.matchMedia("(max-width: 480px)").matches;
   const m = narrow ? cmp : money;
@@ -983,13 +1071,20 @@ function renderPathTable(res) {
   for (let a = v.age; a <= end; a++) {
     const p = res.points[a - v.age], k = nc.points[a - v.age];
     const keep = k ? m(k.balance) + (nc.wholeAge === a ? " ✓" : "") : "—";
+    // Buying (when on): the portfolio if you buy (after closing at the purchase age) and the home's equity.
+    const q = hb && p ? hb.points[a - v.age] : null;
+    const buy = !hb ? "" : q ? `<td>${m(q.post !== undefined ? q.post : q.balance)}</td><td>${a >= hb.b ? m(q.equity) : "—"}</td>` : "<td>—</td><td>—</td>";
     rows.push(p
-      ? `<tr><td>${p.age}</td><td>${m(p.balance)}</td><td>${m(p.coastLine)}</td><td>${p.contrib || p.draw ? m(p.contrib - p.draw) : "—"}</td><td>${m(p.noContrib)}</td><td>${keep}</td></tr>`
-      : `<tr class="past-row"><td>${a}</td><td>—</td><td>—</td><td>—</td><td>—</td><td>${keep}</td></tr>`);
+      ? `<tr><td>${p.age}</td><td>${m(p.balance)}</td><td>${m(p.coastLine)}</td><td>${p.contrib || p.draw ? m(p.contrib - p.draw) : "—"}</td><td>${m(p.noContrib)}</td><td>${keep}</td>${buy}</tr>`
+      : `<tr class="past-row"><td>${a}</td><td>—</td><td>—</td><td>—</td><td>—</td><td>${keep}</td>${buy}</tr>`);
   }
-  $("path-table").innerHTML = `<table class="data"><caption class="visually-hidden">Projection by age, today's dollars. The last column keeps saving at full pace and never coasts, working past ${v.retAge} if needed; a check mark is the first age it reaches the FIRE number.</caption><thead><tr><th scope="col">Age</th><th scope="col">Projected</th><th scope="col">Coast line</th><th scope="col">Added<br>that year</th><th scope="col">Stop<br>today</th><th scope="col">Never<br>coast</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+  const buyHead = hb ? `<th scope="col">Buying</th><th scope="col">Home<br>equity</th>` : "";
+  $("path-table").innerHTML = `<table class="data${hb ? " with-buy" : ""}"><caption class="visually-hidden">Projection by age, today's dollars. The last column keeps saving at full pace and never coasts, working past ${v.retAge} if needed; a check mark is the first age it reaches the FIRE number.${hb ? ` Buying: the portfolio if you buy at ${hb.b}, the home not included; home equity is its value less the loan, before selling costs.` : ""}</caption><thead><tr><th scope="col">Age</th><th scope="col">Projected</th><th scope="col">Coast line</th><th scope="col">Added<br>that year</th><th scope="col">Stop<br>today</th><th scope="col">Never<br>coast</th>${buyHead}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
   // The note sits above the scroll box, so it is read before the rows, not after all of them.
-  $("path-note").textContent = `Never coast: ${kRound(nc.yearly)}/yr every year, no coast ages or Barista draw${end > v.retAge ? `, working past ${v.retAge}` : ""}. ✓ = first age at the FIRE number.`;
+  $("path-note").textContent = `Never coast: ${kRound(nc.yearly)}/yr every year, no coast ages or Barista draw${end > v.retAge ? `, working past ${v.retAge}` : ""}. ✓ = first age at the FIRE number.` +
+    (hb ? ` Buying: the portfolio if you buy at ${hb.b} (after closing), the home not in it; home equity = value − loan, before selling costs.` : "");
+  // On a phone the two buying columns replace "Stop today" (the chart and its key still show it).
+  if (hb) $("path-note").insertAdjacentHTML("beforeend", `<span class="narrow-only"> Stop today is hidden here to make room.</span>`);
 }
 
 // ---------- contributions: stacked bars per partner ----------
@@ -1346,6 +1441,150 @@ function renderBridge(res, br) {
 }
 const kRoundOrDash = (x) => (x > 0.5 ? CF.fmtCompact(x) : "—");
 
+// ---------- buying a home (SPEC 11) ----------
+// Off by default: the row reads "Buying a home · off" and nothing else on the page changes.
+// On: the verdict and a renting-vs-buying list first, then the inputs, then three nested rows.
+
+const fiWords = (fi, top) => (fi.age === null ? `Not by ${top}` : fi.age.toFixed(1));
+const yrsWord = (d) => { const t = Math.abs(d).toFixed(1); return t + (t === "1.0" ? " yr" : " yrs"); };
+// In sentences: whole years ("about 14 years"), not "13.6 yrs".
+const yearsProse = (d) => { const n = Math.round(Math.abs(d)); return n === 0 ? "less than a year" : n === 1 ? "1 year" : `${n} years`; };
+// A delta line under the buying value: icon + words, never colour alone. The arrow follows the
+// number (`rose`: more, later); the colour says whether that is good for buying (`good`).
+function deltaHTML(good, words, rose) { return `<span class="delta ${good ? "up" : "down"}">${rose ? ICON.up : ICON.down}${esc(words)}</span>`; }
+const sameHTML = () => `<span class="delta same">${ICON.check}same</span>`;
+
+function renderHouse(res, h) {
+  const v = res.inputs, R = v.retAge, on = !!v.houseOn;
+  $("sv-house").textContent = UI.houseSummary(res, h);
+  setSwitch("sw-house", on);
+  $("house-hint").textContent = on ? "On: the chart adds a “Buy a home” line. Everything else stays the renting plan." : "Off: nothing on the page changes.";
+  $("house-on").hidden = !on; // hidden, not cleared
+  $("buy-key-li").hidden = !(h && h.applies);
+  if (!on) return;
+  $("seg-down-inv").setAttribute("aria-pressed", v.downFrom ? "true" : "false");
+  $("seg-down-cash").setAttribute("aria-pressed", v.downFrom ? "false" : "true");
+  $("seg-term-15").setAttribute("aria-pressed", v.term === 15 ? "true" : "false");
+  $("seg-term-30").setAttribute("aria-pressed", v.term === 15 ? "false" : "true");
+  $("sv-house-costs").textContent = UI.houseCostsSummary(v);
+  const b = Math.max(v.buyAge, v.age);
+  $("h-buyAge").textContent = (v.buyAge <= v.age ? "Buying today. " : "") + "Already own your home? This section models a purchase, not a home you have.";
+  $("down-hint").textContent = v.downFrom
+    ? (R < 59.5 || b < 59.5
+      ? `Comes out of the portfolio at ${b} and stops compounding. Taking it from a 401(k) or IRA before 59½ usually costs tax and a 10% penalty (IRAs allow up to $10,000 once for a first home); not modeled.`
+      : `Comes out of the portfolio at ${b} and stops compounding.`)
+    : "Cash saved outside the portfolio. For fairness, the renter keeps the same cash invested (net worth only).";
+
+  const out = $("house-out");
+  if (!h.applies) {
+    const why = { badAges: "Fix the ages first.", buyAfterRet: `Pick a buy age before ${R}: after retirement there's no projection to compare.`, noPrice: "Add a home price to compare." }[h.reason] || "";
+    out.innerHTML = `<p class="house-verdict muted">${esc(why)}</p>`;
+    $("d-house-how").hidden = true;
+    $("sv-house-be").textContent = "—";
+    $("house-be").innerHTML = `<p class="fine">${esc(why)}</p>`;
+    return;
+  }
+  if (h.warnings.includes("tooLarge")) {
+    out.innerHTML = `<p class="house-verdict muted">Too large to show.</p>`;
+    $("d-house-how").hidden = true;
+    return;
+  }
+  const top = res.neverCoast.top, A = h.atRet, fr = h.fi.rent.age, fb = h.fi.buy.age;
+
+  // The verdict, in the same terms as the row's summary (whole years in a sentence).
+  let verdict;
+  if (h.cashShort > 0) {
+    const have = res.points[b - v.age].balance;
+    verdict = `<b>Not enough cash at ${b}.</b> You'd have ${cmp(have)} invested, ${cmp(h.cashShort)} short of the ${cmp(h.cash)} needed at closing. The buying line assumes the portfolio is emptied.`;
+  } else if (fr !== null && fb !== null) {
+    const d = fb - fr;
+    verdict = Math.abs(d) < 0.05
+      ? `Buying at ${b}, you'd reach financial independence at <b>about the same age</b> as renting (${Math.round(fb)}).`
+      : `Buying at ${b}, you'd reach financial independence about <b>${yearsProse(d)} ${d > 0 ? "later" : "earlier"}</b> than renting (${Math.round(fb)} instead of ${Math.round(fr)}).`;
+  } else {
+    const n = A.buyNW - A.rentNW;
+    verdict = `Buying at ${b} leaves you <b>${cmp(Math.abs(n))} ${n < 0 ? "less" : "more"}</b> at ${R} than renting, the home counted after selling costs.`;
+  }
+
+  // Renting | Buying, each row with a delta in words under the buying value.
+  const ageCell = (a) => (a === null ? `Not by ${R}` : a <= v.age ? "Now" : String(a));
+  const ageDelta = (ra, ba) => {
+    if (ra === null && ba === null) return "";
+    if (ba === null) return deltaHTML(false, "never, renting does", true);
+    if (ra === null) return deltaHTML(true, "renting never does", false);
+    const d = ba - ra;
+    return d === 0 ? sameHTML() : deltaHTML(d < 0, `${Math.abs(d)} yr${Math.abs(d) === 1 ? "" : "s"} ${d > 0 ? "later" : "earlier"}`, d > 0);
+  };
+  const moneyDelta = (rv, bv) => {
+    const d = bv - rv;
+    return Math.abs(d) < 0.5 ? sameHTML() : deltaHTML(d > 0, `${cmp(Math.abs(d))} ${d > 0 ? "more" : "less"}`, d > 0);
+  };
+  const f = h.first;
+  const tableOf = (rows, caption) => `<table class="hcmp"><caption class="visually-hidden">${caption}</caption>
+    <thead><tr><td></td><th scope="col">Renting</th><th scope="col">Buying at ${b}</th></tr></thead>
+    <tbody>${rows.map(([label, rv, bv, d, note]) => `<tr><th scope="row">${esc(label)}${note ? `<small>${esc(note)}</small>` : ""}</th><td>${rv}</td><td>${bv}${d ? `<small>${d}</small>` : ""}</td></tr>`).join("")}</tbody></table>`;
+  // The essentials, above the inputs.
+  const rows = [
+    ["Housing a month at first", `${money(f.rent)}`, `${money(f.total)}`,
+      Math.abs(f.diff) < 0.5 ? sameHTML() : deltaHTML(f.diff < 0, `${money(Math.abs(f.diff))} ${f.diff > 0 ? "more" : "less"}`, f.diff > 0)],
+    ["Cash at closing", "—", money(h.cash), `<small>${money(h.down)} down + ${money(h.closing)} closing</small>`],
+    ["Financially independent at", fiWords(h.fi.rent, top), fiWords(h.fi.buy, top),
+      fr === null && fb === null ? "" : fb === null ? deltaHTML(false, "never, renting does", true) : fr === null ? deltaHTML(true, "renting never does", false)
+        : Math.abs(fb - fr) < 0.05 ? sameHTML() : deltaHTML(fb < fr, `${yrsWord(fb - fr)} ${fb > fr ? "later" : "earlier"}`, fb > fr),
+      "saving at full pace, never coasting"],
+    [`Net worth at ${R}`, cmp(A.rentNW), cmp(A.buyNW), moneyDelta(A.rentNW, A.buyNW), "home counted after selling costs"],
+  ];
+  const below = [];
+  if (Math.abs(v.rentGrowth) > 1e-9) below.push(`Renting here includes rent growth of ${v.rentGrowth.toFixed(1)}%/yr, so its FIRE number (${cmp(h.fire.rent)}) and FI age differ from the main plan's (${cmp(res.fire)}).`);
+  if (h.cashShort > 0 && A.shortDebt > 0.5) below.push(`Buying net worth counts the ${cmp(h.cashShort)} you'd be short as a debt growing at your return (${cmp(A.shortDebt)} at ${R}); so do the breakevens.`);
+  let afford = "";
+  if (h.cashShort > 0) {
+    afford = h.afford !== null
+      ? `<p class="house-afford">Renting, you'd have the ${cmp(h.cash)} by ${h.afford}. <button type="button" class="btn ghost sm" data-act="buyAt">Buy at ${h.afford}</button></p>`
+      : `<p class="house-afford">Renting, you wouldn't have the ${cmp(h.cash)} before ${R}; try a lower price, a smaller down payment or a separate cash fund.</p>`;
+  }
+  out.innerHTML = `<p class="house-verdict">${verdict}</p>${afford}${tableOf(rows, `Renting compared with buying at ${b}, today's dollars`)}` +
+    below.map((n) => `<p class="fine house-below">${n}</p>`).join("");
+
+  // "How this is worked out": the rest of the comparison and the notes, collapsed.
+  const more = [
+    ["Meets the coast line", ageCell(h.cross.rent), ageCell(h.cross.buy), ageDelta(h.cross.rent, h.cross.buy)],
+    [`Earliest you could ${v.two ? "both " : ""}coast`, ageCell(h.earliest.rent.age), ageCell(h.earliest.buy.age), ageDelta(h.earliest.rent.age, h.earliest.buy.age)],
+    [`Portfolio at ${R}`, cmp(A.rentPortfolio), cmp(A.buyPortfolio), moneyDelta(A.rentPortfolio, A.buyPortfolio)],
+    [`FIRE number`, cmp(h.fire.rent), cmp(h.fire.own), ""],
+  ];
+  const notes = [];
+  const parts = [`P&I ${money(f.pi)}`, `tax ${money(f.tax)}`, `insurance ${money(f.ins)}`, `upkeep ${money(f.maint)}`];
+  if (f.pmi > 0.5) parts.push(`PMI ${money(f.pmi)}${h.pmiEnds !== null ? ` (ends at ${h.pmiEnds})` : ""}`);
+  notes.push(`Owning at first: ${parts.join(" · ")} a month. The payment is fixed in dollars, so it shrinks with inflation.`);
+  const before = Math.max(0, R - b), all = h.yearsCostMore === before;
+  notes.push(h.yearsCostMore
+    ? `Owning costs more than renting ${all ? `every year until ${R}` : `in ${h.yearsCostMore} of the ${before} years until ${R}`}; the extra comes out of your saving${all ? "" : ", and once owning is cheaper the difference is saved"}.`
+    : `Owning costs less than renting every year until ${R}; the difference is added to your saving.`);
+  if (h.yearsShort) notes.push(`In ${h.yearsShort} of those years owning costs more than you were saving; the ${cmp(h.totalDeficit)} gap is assumed to come out of your pay, not your portfolio.`);
+  notes.push(`At ${R} the home is worth ${cmp(A.value)}${A.loanLeft > 0.5 ? ` with ${cmp(A.loanLeft)} left on the loan` : ", paid off"}; after ${(v.sellPct).toFixed(1)}% selling costs that's ${cmp(A.homeNet)} in net worth, never in the FIRE portfolio.`);
+  if (A.credited > 0.5) notes.push(`Renting, the ${cmp(h.cash)} cash fund stays invested: ${cmp(A.credited)} at ${R}, counted in net worth.`);
+  notes.push(`FIRE number if you buy: rent replaced by tax, insurance and upkeep${h.fire.mortLeft > 0.5 ? `, plus ${cmp(h.fire.mortLeft)} for the mortgage payments still due at ${R}` : ""}. Your ${money(v.spend)}/yr retirement spending is taken to include today's ${money(v.rent)}/mo rent.`);
+  if (R < 59.5) notes.push(`Buying, your portfolio at ${R} is ${cmp(A.buyPortfolio)} (renting ${cmp(A.rentPortfolio)}); the bridge uses the renting plan.`);
+  $("d-house-how").hidden = false;
+  $("sv-house-how").textContent = UI.houseHowSummary(h, R);
+  $("house-how").innerHTML = tableOf(more, `More of renting compared with buying at ${b}, today's dollars`) +
+    `<div class="house-notes">${notes.map((n) => `<p>${n}</p>`).join("")}</div>`;
+  showNote("pmi");
+
+  // Breakeven.
+  $("sv-house-be").textContent = UI.breakevenSummary(h);
+  const g = h.breakeven.growth, i = h.breakeven.rate;
+  const gText = g.value !== null
+    ? `Net worth at ${R} ties if home prices grow <b>${g.value.toFixed(1)}%/yr</b> above inflation (you entered ${v.apprec.toFixed(1)}%). Faster growth favors buying.`
+    : g.side === "buy" ? "Buying stays ahead on net worth even if home prices fall 10%/yr after inflation."
+      : "Renting stays ahead on net worth even if home prices grow 10%/yr above inflation.";
+  const iText = i.value !== null
+    ? `With everything else as entered, it ties at a <b>${i.value.toFixed(2)}%</b> mortgage rate (you entered ${v.mortRate.toFixed(2)}%).`
+    : i.side === "buy" ? "Buying stays ahead even at a 20% mortgage rate." : "Renting stays ahead even at a 0% mortgage rate.";
+  $("house-be").innerHTML = `<p class="house-be-p">${gText}</p><p class="house-be-p">${iText}</p><p class="fine">Breakevens compare net worth at ${R} only, the home after selling costs; the FI ages above can tell a different story.</p>`;
+}
+
 // ---------- bottom bar ----------
 
 function renderPeek(res) {
@@ -1476,8 +1715,10 @@ function update() {
   result = CF.project(values);
   gridRes = CF.grid(values);
   bridgeRes = CF.bridge(values, result);
+  houseRes = CF.house(values, result);
   renderHero(result);
   renderInputs(result);
+  renderHouse(result, houseRes);
   drawAllCharts();
   renderHeat(result, gridRes);
   renderPathTable(result);
@@ -1532,12 +1773,13 @@ document.addEventListener("click", (e) => {
     return;
   }
   const act = t.dataset.act;
-  revealFields(t, [{ basis: "basis", size72: "sepShare", try55: "retAge" }[act]].filter(Boolean));
+  revealFields(t, [{ basis: "basis", size72: "sepShare", try55: "retAge", buyAt: "buyAge" }[act]].filter(Boolean));
   const before = { ...values };
   const undo = () => toastButton("Undo", () => { values = before; showAll(); update(); toast(); });
   if (act === "basis") { values.basis = Math.round(CF.rothBasisEstimate(values) / 1000) * 1000; showAll(); userChanged(); toast("Roth basis set from your Roth inputs. ", undo()); }
   else if (act === "size72") { values.sepShare = bridgeRes.shareToCover; showAll(); userChanged(); toast(`72(t) share set to ${values.sepShare}%. `, undo()); }
   else if (act === "try55") { values.retAge = 55; showAll(); userChanged(); toast("Retirement age set to 55. ", undo()); }
+  else if (act === "buyAt" && houseRes && houseRes.afford !== null) { values.buyAge = houseRes.afford; showAll(); userChanged(); toast(`Buying at ${values.buyAge}. `, undo()); }
 });
 
 $("shared-keep").addEventListener("click", () => { setViewingShared(false); update(); toast("Kept. These are now your saved numbers."); });

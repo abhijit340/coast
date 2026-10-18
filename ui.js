@@ -819,6 +819,49 @@
     wrap.addEventListener("contextmenu", (e) => { if (g) e.preventDefault(); });
   }
 
+  // ---------- main chart: pure layout pieces (app.js draws them) ----------
+
+  // Rough width of a label in the chart's font (same estimate app.js uses for every label).
+  const chartTextW = (t, px = 10) => String(t).length * px * 0.6;
+
+  // The crosshair is kept as the age the reader picked; each redraw maps it to an index
+  // into this chart's points, clamped to the chart's range, without changing the age itself.
+  function chartHoverIndex(hoverAge, age, last) {
+    if (hoverAge === null || hoverAge === undefined || !Number.isFinite(hoverAge)) return null;
+    return Math.max(0, Math.min(last, Math.round(hoverAge - age)));
+  }
+
+  // The x-axis labels: today's age ("age N"), the retirement age, the never-coast age on an
+  // extended axis (ncTick, or null), and round ages every xStep where they don't crowd those.
+  // x maps an age to px; W and Rm are the chart width and right margin. Labels that must be
+  // there never draw over each other: the never-coast age wins over retirement (the hairline
+  // still marks retirement), then "age N" shortens to "N", then retirement gives way to it.
+  function chartXTicks({ age, retAge, xEnd, ncTick, xStep, x, W, Rm }) {
+    const anchorOf = (a) => (a === age ? "start" : x(a) > W - Rm - 12 ? "end" : "middle");
+    const lab = (a, text) => {
+      const w = chartTextW(text), anchor = anchorOf(a), px = x(a);
+      const x0 = anchor === "start" ? px : anchor === "end" ? px - w : px - w / 2;
+      return { a, text: String(text), x: px, anchor, x0, x1: x0 + w, ret: a === retAge };
+    };
+    const hits = (p, q) => p.x0 < q.x1 + 3 && q.x0 < p.x1 + 3;
+    const nc = ncTick !== null && ncTick !== undefined && ncTick !== retAge && ncTick !== age ? lab(ncTick, ncTick) : null;
+    let ret = lab(retAge, retAge);
+    if (nc && hits(nc, ret)) ret = null;
+    const tryAge = (others) => [`age ${age}`, String(age)].map((t) => lab(age, t)).find((b) => !others.some((o) => hits(b, o)));
+    let first = tryAge([nc, ret].filter(Boolean));
+    if (!first && ret) { ret = null; first = tryAge([nc].filter(Boolean)); }
+    const out = [first, ret, nc].filter(Boolean);
+    const firstW = chartTextW(first ? first.text : "") + 10;
+    const xRet = x(retAge);
+    for (let a = Math.ceil(age / xStep) * xStep; a <= xEnd; a += xStep) {
+      if (a === age || a === retAge || a === ncTick) continue;
+      if (x(a) - x(age) < firstW || Math.abs(xRet - x(a)) < 22 ||
+        (nc && Math.abs(x(ncTick) - x(a)) < 22) || x(xEnd) - x(a) < 8) continue;
+      out.push(lab(a, a));
+    }
+    return out.sort((p, q) => p.a - q.a);
+  }
+
   const api = {
     UI_KEY, HINT_KEY, parseOpen, withOpen, isOpenIn,
     spoken, kpiSummary,
@@ -826,6 +869,7 @@
     sensitivityText, splitLines, rejectedText, effectText, cardText, appliedText, contribSummary, ecSummary, sparkSummary, partnerSummary, afterCoast, heatSummary, hsaSummary,
     drawSummary, assumeSummary, bridgeSummary, houseSummary, houseCostsSummary, houseHowSummary, breakevenSummary,
     ordinal, bandWords, pctlWords, pctlShort, rateVs, mult, compareSummary, compareItems, COMPARE_NOTE,
+    chartTextW, chartHoverIndex, chartXTicks,
     SLOP, REACH, classifyGesture, gestureEnd, gestureFinish, thumbCenter, nearThumb, dragValue, guardSlider,
   };
   root.CoastUI = api;

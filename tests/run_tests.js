@@ -531,6 +531,56 @@ check("nice rounding", CF.niceRound(1234567, 1000) === 1250000 && CF.niceRound(4
   check("bridge row at 65: one invitation, no chip or teaser", b65.title === "Retiring before 59½?" && b65.chip === null && b65.teaser === "", J(b65));
 }
 
+// ---------- main chart: crosshair and x-axis labels (ui.js) ----------
+{
+  // The crosshair is kept as an age: a redraw maps it to an index, clamped, never rewriting it.
+  check("crosshair at rest stays at rest", UI.chartHoverIndex(null, 42, 23) === null);
+  check("crosshair keeps its age when today's age changes (55 stays 55)",
+    UI.chartHoverIndex(55, 42, 23) === 13 && UI.chartHoverIndex(55, 30, 35) === 25 && 30 + UI.chartHoverIndex(55, 30, 35) === 55);
+  const hv = 65; // picked at the end; the axis shrinks to 60, then grows back to 65
+  check("a shrunken axis clamps the crosshair only for that draw",
+    UI.chartHoverIndex(hv, 42, 18) === 18 && UI.chartHoverIndex(hv, 42, 23) === 23);
+  check("an age before today's clamps to the first point", UI.chartHoverIndex(30, 40, 25) === 0);
+
+  // Same scale as drawChart: L for the y labels, Rm right margin.
+  const axis = (age, retAge, xEnd, ncTick, W, L = 34, Rm = 10) => {
+    const span = Math.max(1, xEnd - age);
+    const x = (a) => L + (a - age) / span * (W - L - Rm);
+    let xStep = span > 40 ? 10 : span > 12 ? 5 : span > 5 ? 2 : 1;
+    if (W < 360 && span > 60) xStep = 20;
+    return { x, L, ticks: UI.chartXTicks({ age, retAge, xEnd, ncTick, xStep, x, W, Rm }) };
+  };
+  const clash = (ts) => ts.some((p, i) => ts.some((q, j) => i < j && p.x0 < q.x1 + 1 && q.x0 < p.x1 + 1));
+  const texts = (ts) => ts.map((t) => t.text).join("|");
+  const d = axis(42, 65, 65, null, 600);
+  check("default axis: age 42, round ages, retirement at the end", texts(d.ticks) === "age 42|45|50|55|60|65" &&
+    d.ticks[0].anchor === "start" && d.ticks[5].anchor === "end", texts(d.ticks));
+  check("ages crowding 'age 31' are skipped (35 drops on a narrow chart)", !texts(axis(31, 65, 65, null, 300).ticks).split("|").includes("35"),
+    texts(axis(31, 65, 65, null, 300).ticks));
+  // Retirement a year after today on an extended (never-coast) axis: the labels used to overlap.
+  for (const [age, ret, end, nc] of [[31, 32, 79, 77], [23, 25, 70, 68], [20, 23, 66, 64], [37, 38, 80, 78]]) {
+    for (const W of [280, 340, 420, 700]) {
+      const a = axis(age, ret, end, nc, W);
+      check(`axis ${age}-${end}, retire ${ret}, width ${W}: no labels overlap`, !clash(a.ticks), texts(a.ticks));
+      check(`axis ${age}-${end}, width ${W}: never-coast age ${nc} and today's age are labelled`,
+        a.ticks.some((t) => t.a === nc) && a.ticks.some((t) => t.a === age), texts(a.ticks));
+    }
+  }
+  // Never-coast a year after retirement on a long axis: the crossing keeps its label.
+  const rn = axis(30, 65, 68, 66, 300);
+  check("never-coast age next to retirement: no overlap, never-coast labelled", !clash(rn.ticks) && rn.ticks.some((t) => t.a === 66), texts(rn.ticks));
+  // Sweep: no two labels ever overlap, every label sits inside the chart.
+  let bad = "";
+  for (let k = 0; k < 400 && !bad; k++) {
+    const age = 18 + Math.floor(rand() * 60), ret = Math.min(99, age + 1 + Math.floor(rand() * 30));
+    const ext = rand() < 0.5, nc = ext ? ret + 1 + Math.floor(rand() * 40) : null, end = ext ? Math.max(ret, Math.min(100, nc + 2)) : ret;
+    const W = 260 + Math.floor(rand() * 700);
+    const a = axis(age, ret, end, nc !== null && nc <= end ? nc : null, W);
+    if (clash(a.ticks) || a.ticks.some((t) => t.x0 < a.L - 1 || t.x1 > W)) bad = `${age}/${ret}/${end}/${nc} W${W}: ${texts(a.ticks)}`;
+  }
+  check("400 random axes: x labels never overlap and stay inside the chart", !bad, bad);
+}
+
 // ---------- buying a home: rent vs buy (SPEC 11) ----------
 {
   // Mortgage payment and balance.

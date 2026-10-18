@@ -34,7 +34,7 @@ if (coarse.addEventListener) coarse.addEventListener("change", syncTouchGuard);
 let values = { ...CF.DEFAULTS };
 let result = null, gridRes = null, bridgeRes = null, houseRes = null, sugRes = null;
 let sliderMoving = false; // true while a slider's own input event runs (suggest is then throttled)
-let hover = null;            // index into result.points the crosshair sits on, or null
+let hoverAge = null;         // the age the crosshair sits on (as picked), or null at rest
 let viewingShared = false;   // showing a shared link's numbers; not saved until edited or kept
 const notes = {};            // per field: { err, adj }
 
@@ -399,9 +399,10 @@ function setSwitch(id, on) { $(id).setAttribute("aria-checked", on ? "true" : "f
 function wireSwitches() {
   $("sw-two").addEventListener("click", () => { values.two = values.two ? 0 : 1; clampHsa(); userChanged(); });
   $("remove-B").addEventListener("click", () => {
+    const before = { ...values }; // Undo puts back B and the HSA the one-person limit cut
     values.two = 0; clampHsa(); userChanged();
     $("sw-two").focus();
-    toast("Partner B removed. ", toastButton("Undo", () => { values.two = 1; showAll(); update(); toast(); }));
+    toast("Partner B removed. ", toastButton("Undo", () => { values = before; showAll(); update(); toast(); }));
   });
   for (const p of ["A", "B"]) {
     $("sw-coast-" + p).addEventListener("click", () => { values["coastOn" + p] = values["coastOn" + p] ? 0 : 1; userChanged(); });
@@ -671,7 +672,19 @@ function drawChart() {
   $("chart-title").textContent = res.warnings.includes("retAgeNotAfterAge") ? "Your path" : `Your path to ${v.retAge}`;
   // One short line: the real return. How it's derived is in the chart's label and the Returns row.
   $("chart-sub").textContent = `${(res.r * 100).toFixed(2)}% real return · today's dollars`;
-  if (empty) { svg.innerHTML = ""; geo = null; $("readout").textContent = ""; return; }
+  if (empty) {
+    // Nothing drawn: everything that describes the chart goes back to its plain form too.
+    svg.innerHTML = ""; geo = null; hoverAge = null;
+    $("readout").textContent = "";
+    $("readout").classList.add("rest");
+    $("zone-key").textContent = "Could coast";
+    $("zone-key").parentElement.hidden = true;
+    $("stop-key").textContent = "If you stop today";
+    $("keep-key").textContent = "Keep saving, never coast";
+    if ($("buy-key")) $("buy-key").textContent = "Buy a home (portfolio, not the house)";
+    svg.setAttribute("aria-label", `Chart not shown. ${$("chart-empty").textContent}`);
+    return;
+  }
 
   const pts = res.points, n = pts.length - 1;
   // Never coast: the x-axis runs past retirement when full-pace saving gets there later.
@@ -709,19 +722,11 @@ function drawChart() {
   }
   let xStep = span > 40 ? 10 : span > 12 ? 5 : span > 5 ? 2 : 1;
   if (W < 360 && span > 60) xStep = 20;
-  const ages = new Set([v.age, v.retAge]);
-  for (let a = Math.ceil(v.age / xStep) * xStep; a <= xEnd; a += xStep) ages.add(a);
-  const firstTick = `age ${v.age}`, firstW = textW(firstTick) + 10;
   const extended = xEnd > v.retAge;
   // Extended axis: always tick the never-coast age, so the crossing has a label under it.
   const ncTick = extended && nc.wholeAge !== null && nc.wholeAge <= xEnd ? nc.wholeAge : null;
-  if (ncTick !== null) ages.add(ncTick);
-  const kept = (a) => a === v.age || a === v.retAge || a === ncTick;
-  for (const a of [...ages].sort((p, q) => p - q)) {
-    if (!kept(a) && (x(a) - x(v.age) < firstW || Math.abs(x(v.retAge) - x(a)) < 22 ||
-      (ncTick !== null && Math.abs(x(ncTick) - x(a)) < 22) || x(xEnd) - x(a) < 8)) continue;
-    const anchor = a === v.age ? "start" : x(a) > W - Rm - 12 ? "end" : "middle";
-    s += `<text class="tick${a === v.retAge && extended ? " tick-ret" : ""}" x="${x(a).toFixed(1)}" y="${H - B + 14}" text-anchor="${anchor}">${a === v.age ? firstTick : a}</text>`;
+  for (const t of UI.chartXTicks({ age: v.age, retAge: v.retAge, xEnd, ncTick, xStep, x, W, Rm })) {
+    s += `<text class="tick${t.ret && extended ? " tick-ret" : ""}" x="${t.x.toFixed(1)}" y="${H - B + 14}" text-anchor="${t.anchor}">${t.text}</text>`;
   }
   // Past retirement the chart shows only the never-coast line; a hairline marks the chosen age.
   if (extended) s += `<line class="ret-line" x1="${x(v.retAge).toFixed(1)}" x2="${x(v.retAge).toFixed(1)}" y1="${T}" y2="${H - B}"/>`;
@@ -776,7 +781,8 @@ function drawChart() {
     }
     return false;
   };
-  const fits = (b, keys) => b.x0 >= 0 && b.x1 <= W && b.y0 >= 0 && b.y1 <= H - B + 2 &&
+  // Inside the plot: left of L are the y-axis labels.
+  const fits = (b, keys) => b.x0 >= L - 2 && b.x1 <= W && b.y0 >= 0 && b.y1 <= H - B + 2 &&
     !placed.some((p) => overlaps(p, b)) && !(keys && crossesLine(b, keys));
   const place = (cands, keys) => {
     const c = cands.find((k) => fits(k.box, keys)) || (cands[0].must ? cands[0] : null);
@@ -795,18 +801,23 @@ function drawChart() {
   if (shortBy > 0.5 && fy < ey - 3) {
     const bx = ex + 5, shortText = `Short ${cmp(shortBy)}`;
     endSvg += `<path class="short-br" d="M${bx - 3} ${fy.toFixed(1)}H${bx}V${ey.toFixed(1)}H${bx - 3}"/>`;
-    endSvg += `<text class="short-t halo" x="${(ex - 6).toFixed(1)}" y="${(fy + 13).toFixed(1)}" text-anchor="end">${shortText}</text>`;
-    placed.push(boxOf(ex - 6, fy + 13, shortText, 11, "end"));
+    // Left of the retirement marker; right of the bracket when retirement sits near the axis
+    // (an extended axis). No room either side: the bracket stays and the chip gives the amount.
+    const sc = [[ex - 6, "end"], [bx + 5, "start"]].map(([tx, anchor]) => ({ box: boxOf(tx, fy + 13, shortText, 11, anchor),
+      svg: `<text class="short-t halo" x="${tx.toFixed(1)}" y="${(fy + 13).toFixed(1)}" text-anchor="${anchor}">${shortText}</text>` }));
+    const sp = sc.find((k) => fits(k.box));
+    if (sp) { placed.push(sp.box); endSvg += sp.svg; }
     endY = ey - fy > 36 ? ey - 8 : Math.min(H - B - 3, ey + 15);
   }
   // Placed clear of the never-coast line where it can be (it branches off the plan before R).
-  const endCands = [endY, endY - 13, ey + 15, endY + 13, ey - 21].filter((yy, i, a) => a.indexOf(yy) === i && yy <= H - B - 3)
-    .map((yy) => ({ box: boxOf(ex - 6, yy, endText, 11, "end"),
-      svg: `<text class="end-label halo" x="${(ex - 6).toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="end">${endText}</text>` }));
+  // Left of the dot first; right of it only when retirement sits near the axis (an extended axis).
+  const endYs = [endY, endY - 13, ey + 15, endY + 13, ey - 21].filter((yy, i, a) => a.indexOf(yy) === i && yy <= H - B - 3);
+  const endCands = [[ex - 6, "end"], [ex + 8, "start"]].flatMap(([tx, anchor]) => endYs.map((yy) => ({ box: boxOf(tx, yy, endText, 11, anchor),
+    svg: `<text class="end-label halo" x="${tx.toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="${anchor}">${endText}</text>` })));
+  const inPlot = (b) => b.x0 >= L - 2 && b.x1 <= W;
   const endPick = endCands.find((k) => fits(k.box, ["keep", "balance", "buy"])) || endCands.find((k) => fits(k.box, ["keep", "balance"])) ||
-    endCands.find((k) => fits(k.box, ["keep"])) || endCands[0];
-  placed.push(endPick.box);
-  endSvg += endPick.svg;
+    endCands.find((k) => fits(k.box, ["keep"])) || endCands.find((k) => inPlot(k.box));
+  if (endPick) { placed.push(endPick.box); endSvg += endPick.svg; }
   // Where saving at full pace (never coasting) first reaches the FIRE number.
   // Already at FIRE today: no dot or label (the tile says "Now"), since the balance sits above the line.
   if (nc.age !== null && nc.age > v.age && nc.age <= xEnd) {
@@ -949,7 +960,7 @@ function drawChart() {
   geo = { x, y, W, H, T, B, L, Rm, span, last: xEnd - v.age, ncPts, buyPts, bi };
   $("keep-key").textContent = keepKeyText(res);
   svg.setAttribute("aria-label", `Chart from age ${v.age} to ${xEnd}, in today's dollars at a ${(res.r * 100).toFixed(2)}% real return (${v.nominal.toFixed(1)}% return, ${v.inflation.toFixed(1)}% inflation). Your plan reaches ${cmp(res.balanceAtRet)} at ${v.retAge} against a FIRE number of ${cmp(res.fire)}. ${neverCoastWords(res)}${hb ? ` Buying a home at ${hb.b}, the portfolio (the home not included) reaches ${cmp(hb.atRet.buyPortfolio)} at ${v.retAge}, against a FIRE number of ${cmp(hb.fire.own)} if you buy.` : ""} ${$("headline").textContent} Use the left and right arrow keys to step through ages, Home and End to jump, Escape to clear.`);
-  showHover(hover === null ? null : Math.min(hover, geo.last));
+  paintHover(UI.chartHoverIndex(hoverAge, v.age, geo.last));
 }
 
 // The last age on the chart: retirement, or later when saving at full pace (never
@@ -1001,9 +1012,16 @@ function readoutHTML(age, p, k, rest, q) {
   return s;
 }
 
+// The reader picked index i (null: back to rest); it is kept as an age, so a redraw after an
+// edit stays on that age (clamped to the new range) and never rewrites the pick.
 function showHover(i) {
   if (!geo || !result) return;
-  hover = i;
+  hoverAge = i === null ? null : result.inputs.age + i;
+  paintHover(i);
+}
+
+function paintHover(i) {
+  if (!geo || !result) return;
   const pts = result.points, n = pts.length - 1;
   const idx = i === null ? n : i, age = result.inputs.age + idx;
   const p = pts[idx], k = geo.ncPts[idx], q = geo.buyPts && idx >= geo.bi ? geo.buyPts[idx] : null;
@@ -1044,11 +1062,14 @@ function wireChart() {
   };
   svg.addEventListener("pointerdown", (e) => { seen(); live(false); hoverAtPointer(e); });
   svg.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") showHover(null); });
+  // A swipe that starts on the chart and scrolls the page: the browser takes it, so it wasn't a pick.
+  svg.addEventListener("pointercancel", () => showHover(null));
   svg.addEventListener("blur", () => showHover(null));
   svg.addEventListener("keydown", (e) => {
     if (!geo) return;
     const last = geo.last;
-    let i = hover === null ? -1 : hover;
+    const cur = UI.chartHoverIndex(hoverAge, result.inputs.age, last);
+    let i = cur === null ? -1 : cur;
     if (e.key === "ArrowRight") i = Math.min(last, i + 1);
     else if (e.key === "ArrowLeft") i = i < 0 ? 0 : Math.max(0, i - 1);
     else if (e.key === "Home") i = 0;
@@ -1069,7 +1090,8 @@ function wireChart() {
     if (open) renderPathTable(result);
   });
   let raf = 0;
-  const redraw = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => result && drawAllCharts()); };
+  // The table too: its amounts are compact at phone width and full above it.
+  const redraw = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { if (result) { drawAllCharts(); renderPathTable(result); } }); };
   // Only a change of width redraws: opening or closing a section changes #deeper's height, not its width.
   const widths = new Map();
   const onResize = (entries) => {

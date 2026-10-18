@@ -5,7 +5,7 @@
 // answered within a few seconds (a weak signal, where waiting could take minutes).
 // The handful of files the page needs are saved at install, so it works offline
 // from the second visit on even if some were never re-requested.
-const CACHE = "coast-fire-v10"; // bump whenever SHELL changes (see README)
+const CACHE = "coast-fire-v11"; // bump whenever SHELL changes (see README)
 const WAIT_MS = 3000; // how long to wait for the network before using the saved copy
 const SHELL = [
   "./", "index.html", "style.css", "benchmarks.js", "calc.js", "ui.js", "app.js", "privacy.html", "manifest.webmanifest",
